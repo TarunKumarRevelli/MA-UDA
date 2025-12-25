@@ -19,7 +19,7 @@ class Config:
         # Training settings - Stage 1 (CycleGAN)
         self.cyclegan_epochs = 100
         self.cyclegan_lr = 2e-6
-        self.cyclegan_batch_size = 4
+        self.cyclegan_batch_size = 6
         
         # Training settings - Stage 2 (Segmentation)
         self.seg_epochs = 100
