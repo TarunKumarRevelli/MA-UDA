@@ -30,6 +30,43 @@ class BrainSegmentationDataset(Dataset):
         
     def __len__(self):
         return self.length
+
+    def _load_file(self, path, is_mask=False):
+        """Helper to load .npy files and convert to PIL Image"""
+        if path.endswith('.npy'):
+            # Load the array
+            data = np.load(path)
+            
+            # If it's a mask, keep it as integers (labels)
+            if is_mask:
+                data = data.astype(np.uint8)
+                # Handle 3D shape (1, H, W) -> (H, W)
+                if len(data.shape) == 3:
+                    data = data.squeeze()
+                return Image.fromarray(data).convert('L')
+            
+            # If it's an image, normalize to 0-255
+            else:
+                # Handle 3D shape (1, H, W) -> (H, W)
+                if len(data.shape) == 3:
+                    data = data.squeeze()
+                    
+                # Normalize float data to 0-255 uint8
+                if data.dtype != np.uint8:
+                    min_val = data.min()
+                    max_val = data.max()
+                    if max_val > min_val:
+                        data = (data - min_val) / (max_val - min_val) * 255.0
+                    else:
+                        data = data * 0 # Handle blank images
+                    data = data.astype(np.uint8)
+                
+                # Convert to RGB (replicates grayscale to 3 channels for models)
+                return Image.fromarray(data).convert('RGB')
+        else:
+            # Fallback for standard image files
+            mode = 'L' if is_mask else 'RGB'
+            return Image.open(path).convert(mode)
     
     def __getitem__(self, idx):
         # Get source image and mask
@@ -39,26 +76,32 @@ class BrainSegmentationDataset(Dataset):
         source_img_path = os.path.join(self.source_img_dir, source_img_name)
         source_mask_path = os.path.join(self.source_mask_dir, source_img_name)
         
-        source_img = Image.open(source_img_path).convert('RGB')
-        source_mask = Image.open(source_mask_path).convert('L')
+        # LOAD USING HELPER
+        source_img = self._load_file(source_img_path, is_mask=False)
+        source_mask = self._load_file(source_mask_path, is_mask=True)
         
         # Get target image
         target_idx = idx % len(self.target_images)
         target_img_name = self.target_images[target_idx]
         target_img_path = os.path.join(self.target_img_dir, target_img_name)
-        target_img = Image.open(target_img_path).convert('RGB')
+        
+        # LOAD USING HELPER
+        target_img = self._load_file(target_img_path, is_mask=False)
         
         # Apply transforms
         if self.transform:
             source_img = self.transform(source_img)
             target_img = self.transform(target_img)
-            # Mask transform (no normalization)
-            mask_transform = transforms.Compose([
-                transforms.Resize((256, 256)),
-                transforms.ToTensor()
-            ])
-            source_mask = mask_transform(source_mask)
-            source_mask = (source_mask * 255).long().squeeze(0)
+            
+            # Mask transform (custom resizing for mask)
+            # We use Nearest Neighbor interpolation for masks to avoid creating new labels (e.g. 1.5)
+            source_mask = transforms.functional.resize(
+                source_mask, 
+                (256, 256), 
+                interpolation=transforms.InterpolationMode.NEAREST
+            )
+            # Convert to tensor manually to keep integer type
+            source_mask = torch.from_numpy(np.array(source_mask)).long()
         
         return {
             'source_img': source_img,
@@ -85,6 +128,24 @@ class CycleGANDataset(Dataset):
     
     def __len__(self):
         return self.length
+
+    def _load_npy_image(self, path):
+        """Helper specifically for loading CycleGAN images"""
+        data = np.load(path)
+        
+        # Squeeze channel dim if present: (1, H, W) -> (H, W)
+        if len(data.shape) == 3:
+            data = data.squeeze()
+            
+        # Normalize to 0-255
+        if data.dtype != np.uint8:
+            min_val = data.min()
+            max_val = data.max()
+            if max_val > min_val:
+                data = (data - min_val) / (max_val - min_val) * 255.0
+            data = data.astype(np.uint8)
+            
+        return Image.fromarray(data).convert('RGB')
     
     def __getitem__(self, idx):
         source_idx = idx % len(self.source_images)
@@ -93,8 +154,9 @@ class CycleGANDataset(Dataset):
         source_path = os.path.join(self.source_dir, self.source_images[source_idx])
         target_path = os.path.join(self.target_dir, self.target_images[target_idx])
         
-        source_img = Image.open(source_path).convert('RGB')
-        target_img = Image.open(target_path).convert('RGB')
+        # USE NEW LOADING LOGIC
+        source_img = self._load_npy_image(source_path)
+        target_img = self._load_npy_image(target_path)
         
         if self.transform:
             source_img = self.transform(source_img)
