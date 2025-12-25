@@ -21,9 +21,9 @@ class BrainSegmentationDataset(Dataset):
         
         # Get list of images
         self.source_images = sorted([f for f in os.listdir(source_img_dir) 
-                                    if f.endswith('.png')])
+                                    if f.endswith('.npy')])
         self.target_images = sorted([f for f in os.listdir(target_img_dir) 
-                                    if f.endswith('.png')])
+                                    if f.endswith('.npy')])
         
         # For training, we need paired access
         self.length = max(len(self.source_images), len(self.target_images))
@@ -77,9 +77,9 @@ class CycleGANDataset(Dataset):
         self.transform = transform
         
         self.source_images = sorted([f for f in os.listdir(source_dir) 
-                                    if f.endswith('.png')])
+                                    if f.endswith('.npy')])
         self.target_images = sorted([f for f in os.listdir(target_dir) 
-                                    if f.endswith('.png')])
+                                    if f.endswith('.npy')])
         
         self.length = max(len(self.source_images), len(self.target_images))
     

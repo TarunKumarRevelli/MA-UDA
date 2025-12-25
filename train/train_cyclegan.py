@@ -182,9 +182,9 @@ class CycleGANTrainer:
                 
                 # Save
                 save_path_s2t = os.path.join(self.config.output_dir, 'cyclegan_samples',
-                                            f'epoch_{epoch+1}_s2t_{i}.png')
+                                            f'epoch_{epoch+1}_s2t_{i}.npy')
                 save_path_t2s = os.path.join(self.config.output_dir, 'cyclegan_samples',
-                                            f'epoch_{epoch+1}_t2s_{i}.png')
+                                            f'epoch_{epoch+1}_t2s_{i}.npy')
                 
                 Image.fromarray((img_s2t * 255).astype(np.uint8)).save(save_path_s2t)
                 Image.fromarray((img_t2s * 255).astype(np.uint8)).save(save_path_t2s)
