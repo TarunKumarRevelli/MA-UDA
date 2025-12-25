@@ -39,7 +39,6 @@ env/
 *.ipynb_checkpoints
 
 # Data directories (don't commit large datasets)
-data/
 datasets/
 *.png
 *.jpg
