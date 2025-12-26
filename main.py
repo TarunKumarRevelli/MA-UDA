@@ -94,6 +94,24 @@ def main():
         cyclegan_trainer = CycleGANTrainer(config)
         cyclegan_trainer.train()
         print("\nCycleGAN training completed!")
+
+        # ====================================================
+        # ⚠️ CRITICAL MEMORY FLUSH (ADD THIS BLOCK) ⚠️
+        # ====================================================
+        print("Freeing GPU memory before Stage 2...")
+        
+        # 1. Delete the object to remove python references
+        del cyclegan_trainer
+        
+        # 2. Force Python Garbage Collection
+        import gc
+        gc.collect()
+        
+        # 3. Force PyTorch to release cached CUDA memory
+        torch.cuda.empty_cache()
+        
+        print(f"Memory cleared. Current allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+        # ====================================================
     
     # Stage 2: Train Segmentation with MA-UDA
     if args.stage in ['segmentation', 'all']:
