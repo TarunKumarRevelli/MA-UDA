@@ -54,11 +54,11 @@ def main():
         config.seg_epochs = 2          # Only run 2 epochs
         config.vis_interval = 1        # Save images every epoch
         config.save_interval = 1       # Save checkpoint every epoch
-        config.cyclegan_batch_size = 2 # Tiny batch size
-        config.seg_batch_size = 2      # Tiny batch size
+        config.cyclegan_batch_size = 1 # Tiny batch size
+        config.seg_batch_size = 1      # Tiny batch size
         print("-> Epochs set to 2")
         print("-> Batches limited to 5 per epoch")
-        print("-> Saving every epoch\n")
+        print("-> Saving every epoch\n")    
     
     if args.batch_size:
         config.cyclegan_batch_size = args.batch_size
