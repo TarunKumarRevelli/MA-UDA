@@ -50,4 +50,6 @@ class Config:
         self.vis_interval = 10
         self.save_interval = 5
 
+        self.debug = False
+
 config = Config()

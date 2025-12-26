@@ -214,6 +214,10 @@ class MAUDATrainer:
                 'seg': f"{loss_dict['seg'].item():.4f}",
                 'pred': f"{loss_dict['pred'].item():.4f}"
             })
+
+            if self.config.debug and i >= 5:
+                print("Debug mode: Breaking epoch early...")
+                break
         
         # Compute averages
         for key in epoch_losses:

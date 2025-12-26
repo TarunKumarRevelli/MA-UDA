@@ -31,6 +31,8 @@ def main():
                        help='Batch size (overrides config)')
     parser.add_argument('--lr', type=float, default=None,
                        help='Learning rate (overrides config)')
+    parser.add_argument('--dry-run', action='store_true', 
+                       help='Run a fast smoke test (2 epochs, 5 batches each)')
     
     args = parser.parse_args()
     
@@ -42,6 +44,21 @@ def main():
     config.checkpoint_dir = args.checkpoint_dir
     config.cyclegan_epochs = args.cyclegan_epochs
     config.seg_epochs = args.seg_epochs
+
+    if args.dry_run:
+        print("\n" + "!"*40)
+        print("⚠️  DRY RUN MODE ACTIVATED ⚠️")
+        print("!"*40)
+        config.debug = True            # Enable debug flag
+        config.cyclegan_epochs = 2     # Only run 2 epochs
+        config.seg_epochs = 2          # Only run 2 epochs
+        config.vis_interval = 1        # Save images every epoch
+        config.save_interval = 1       # Save checkpoint every epoch
+        config.cyclegan_batch_size = 2 # Tiny batch size
+        config.seg_batch_size = 2      # Tiny batch size
+        print("-> Epochs set to 2")
+        print("-> Batches limited to 5 per epoch")
+        print("-> Saving every epoch\n")
     
     if args.batch_size:
         config.cyclegan_batch_size = args.batch_size

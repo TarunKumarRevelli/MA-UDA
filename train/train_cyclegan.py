@@ -129,6 +129,10 @@ class CycleGANTrainer:
                 'G_loss': f'{loss_G.item():.4f}',
                 'D_loss': f'{loss_D.item():.4f}'
             })
+
+            if self.config.debug and i >= 5:
+                print("Debug mode: Breaking epoch early...")
+                break
         
         avg_g_loss = epoch_g_loss / len(self.dataloader)
         avg_d_loss = epoch_d_loss / len(self.dataloader)
