@@ -37,7 +37,7 @@ class Config:
         self.lambda_mha = 0.1
         
         # Model settings
-        self.swin_embed_dim = 48
+        self.swin_embed_dim = 96
         self.swin_depths = [2, 2, 6, 2]
         self.swin_num_heads = [3, 6, 12, 24]
         self.window_size = 4
