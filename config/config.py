@@ -44,7 +44,7 @@ class Config:
         
         # Device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.num_workers = 4
+        self.num_workers = 0
         
         # Visualization
         self.vis_interval = 10
