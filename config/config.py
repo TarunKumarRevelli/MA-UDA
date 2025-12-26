@@ -24,7 +24,7 @@ class Config:
         # Training settings - Stage 2 (Segmentation)
         self.seg_epochs = 100
         self.seg_lr = 0.01
-        self.seg_batch_size = 6
+        self.seg_batch_size = 1
         self.momentum = 0.9
         self.weight_decay = 5e-4
         self.discriminator_lr = 5e-5
