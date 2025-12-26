@@ -206,7 +206,7 @@ class PatchEmbed(nn.Module):
 class SwinTransformerBlock(nn.Module):
     """Simplified Swin Transformer Block"""
     
-    def __init__(self, dim, num_heads, window_size=7, mlp_ratio=4.):
+    def __init__(self, dim, num_heads, window_size=4, mlp_ratio=4.):
         super().__init__()
         self.dim = dim
         self.num_heads = num_heads
@@ -272,7 +272,7 @@ class SwinTransformerSegmentation(nn.Module):
                 SwinTransformerBlock(
                     dim=layer_dim,
                     num_heads=num_heads[i_layer],
-                    window_size=7
+                    window_size=4
                 )
                 for _ in range(depths[i_layer])
             ])

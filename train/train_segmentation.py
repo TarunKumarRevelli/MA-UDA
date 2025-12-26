@@ -37,7 +37,8 @@ class MAUDATrainer:
             num_classes=config.num_classes,
             embed_dim=config.swin_embed_dim,
             depths=config.swin_depths,
-            num_heads=config.swin_num_heads
+            num_heads=config.swin_num_heads,
+            use_checkpoint=True
         ).to(self.device)
         
         # Load pre-trained CycleGAN generators

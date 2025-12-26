@@ -13,7 +13,7 @@ class Config:
         self.checkpoint_dir = "checkpoints"
         
         # Data settings
-        self.image_size = (256, 256)
+        self.image_size = (128, 128)
         self.num_classes = 4  # Background + 3 tumor regions (WT, TC, ET)
         
         # Training settings - Stage 1 (CycleGAN)
@@ -40,7 +40,7 @@ class Config:
         self.swin_embed_dim = 48
         self.swin_depths = [2, 2, 6, 2]
         self.swin_num_heads = [3, 6, 12, 24]
-        self.window_size = 7
+        self.window_size = 4
         
         # Device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
