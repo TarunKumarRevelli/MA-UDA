@@ -164,8 +164,16 @@ class CycleGANTrainer:
         with torch.no_grad():
             # Get a batch
             batch = next(iter(self.dataloader))
-            source = batch['source'][:4].to(self.device)
-            target = batch['target'][:4].to(self.device)
+            source = batch['source'].to(self.device)
+            target = batch['target'].to(self.device)
+            
+            # Calculate how many images to save (min of Batch Size or 4)
+            # This prevents the "IndexError" when batch_size=2
+            num_samples = min(len(source), 4)
+            
+            # Slice the data to the correct size
+            source = source[:num_samples]
+            target = target[:num_samples]
             
             # Generate images
             outputs = self.model(source, target)
@@ -175,7 +183,7 @@ class CycleGANTrainer:
                 return (x + 1) / 2
             
             # Save images
-            for i in range(4):
+            for i in range(num_samples): # <--- Uses calculated length, not hardcoded 4
                 # Source to Target
                 img_s = denorm(source[i]).cpu().numpy().transpose(1, 2, 0)
                 img_s2t = denorm(outputs['fake_target'][i]).cpu().numpy().transpose(1, 2, 0)
@@ -184,12 +192,13 @@ class CycleGANTrainer:
                 img_t = denorm(target[i]).cpu().numpy().transpose(1, 2, 0)
                 img_t2s = denorm(outputs['fake_source'][i]).cpu().numpy().transpose(1, 2, 0)
                 
-                # Save
+                # Define paths (Ensure .png extension)
                 save_path_s2t = os.path.join(self.config.output_dir, 'cyclegan_samples',
                                             f'epoch_{epoch+1}_s2t_{i}.png')
                 save_path_t2s = os.path.join(self.config.output_dir, 'cyclegan_samples',
                                             f'epoch_{epoch+1}_t2s_{i}.png')
                 
+                # Save using PIL
                 Image.fromarray((img_s2t * 255).astype(np.uint8)).save(save_path_s2t)
                 Image.fromarray((img_t2s * 255).astype(np.uint8)).save(save_path_t2s)
     
