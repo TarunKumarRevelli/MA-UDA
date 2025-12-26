@@ -35,6 +35,7 @@ class SwinTransformerBlock(nn.Module):
         self.window_size = window_size
         
         self.norm1 = nn.LayerNorm(dim)
+        # Note: This uses Global Attention (ViT style), not Window Attention (Swin style)
         self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
         
         self.norm2 = nn.LayerNorm(dim)
@@ -71,17 +72,22 @@ class SwinTransformerSegmentation(nn.Module):
         self.num_classes = num_classes
         self.num_layers = len(depths)
         self.embed_dim = embed_dim
+        # Calculate final features dimension
         self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
         
         # Patch embedding
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         self.patches_resolution = self.patch_embed.patches_resolution
         
-        # Transformer blocks
-        self.layers = nn.ModuleList()
+        # --- FIX START: Separate Stages and Downsamplers ---
+        self.stages = nn.ModuleList()
+        self.downsamplers = nn.ModuleList()
+        
         for i_layer in range(self.num_layers):
             layer_dim = int(embed_dim * 2 ** i_layer)
-            layer = nn.ModuleList([
+            
+            # Create the block for this stage
+            stage_blocks = nn.ModuleList([
                 SwinTransformerBlock(
                     dim=layer_dim,
                     num_heads=num_heads[i_layer],
@@ -89,11 +95,13 @@ class SwinTransformerSegmentation(nn.Module):
                 )
                 for _ in range(depths[i_layer])
             ])
-            self.layers.append(layer)
+            self.stages.append(stage_blocks)
             
-            # Patch merging (downsampling) except for the last layer
+            # Create downsampler for this stage (if not the last one)
             if i_layer < self.num_layers - 1:
-                self.layers.append(nn.Linear(layer_dim, layer_dim * 2))
+                # Using Linear for channel expansion
+                self.downsamplers.append(nn.Linear(layer_dim, layer_dim * 2))
+        # --- FIX END ---
         
         # Decoder (UperNet-style)
         self.decoder = nn.ModuleList([
@@ -133,17 +141,18 @@ class SwinTransformerSegmentation(nn.Module):
         # Patch embedding
         x = self.patch_embed(x)  # [B, N, C]
         
-        # Apply Transformer blocks and collect attention
+        # --- FIX START: Correct Iteration Loop ---
         for i_layer in range(self.num_layers):
-            for block in self.layers[i_layer]:
-                if isinstance(block, SwinTransformerBlock):
-                    x = block(x)
-                    # Collect attention weights
-                    if block.attention_weights is not None:
-                        self.attention_masks.append(block.attention_weights)
-                else:
-                    # Patch merging
-                    x = block(x)
+            # 1. Run all blocks in this stage
+            for block in self.stages[i_layer]:
+                x = block(x)
+                if block.attention_weights is not None:
+                    self.attention_masks.append(block.attention_weights)
+            
+            # 2. Run downsampler if it exists for this layer
+            if i_layer < len(self.downsamplers):
+                x = self.downsamplers[i_layer](x)
+        # --- FIX END ---
         
         # Reshape for decoder
         B, N, C = x.shape
