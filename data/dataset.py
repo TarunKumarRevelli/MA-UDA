@@ -97,7 +97,7 @@ class BrainSegmentationDataset(Dataset):
             # We use Nearest Neighbor interpolation for masks to avoid creating new labels (e.g. 1.5)
             source_mask = transforms.functional.resize(
                 source_mask, 
-                (256, 256), 
+                (128, 128), 
                 interpolation=transforms.InterpolationMode.NEAREST
             )
             # Convert to tensor manually to keep integer type
@@ -168,14 +168,14 @@ def get_transforms(is_train=True):
     """Get image transforms"""
     if is_train:
         return transforms.Compose([
-            transforms.Resize((256, 256)),
+            transforms.Resize((128, 128)),
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
     else:
         return transforms.Compose([
-            transforms.Resize((256, 256)),
+            transforms.Resize((128, 128)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
