@@ -84,7 +84,7 @@ def infer_cyclegan(image_path, checkpoint_path, direction='s2t'):
     plt.show()
 
 # --- RUN TEST ---
-chk_path = "checkpoints/cyclegan_epoch_15.pth" 
+chk_path = "/kaggle/input/cyclegan-15/pytorch/default/1/cyclegan_epoch_15.pth" 
 # Try a different file just in case s70 is actually empty
 test_img = "/kaggle/input/brats19-60-to-90-slices-0-to-3-relabelled/t1/BraTS19_2013_10_1_s75.npy"
 
