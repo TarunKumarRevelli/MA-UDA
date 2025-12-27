@@ -394,8 +394,9 @@ class MAUDATrainer:
             self.train_dataset,
             batch_size=config.seg_batch_size,
             shuffle=True,
-            num_workers=0, 
-            pin_memory=False
+            num_workers=4, 
+            pin_memory=True,
+            persistent_workers=True
         )
         self.best_dice = 0.0
     
