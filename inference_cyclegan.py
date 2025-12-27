@@ -75,7 +75,7 @@ def infer_cyclegan(image_path, checkpoint_path, direction='s2t'):
     plt.axis('off')
     
     # --- CHANGE IS HERE ---
-    output_filename = "inference_result.png"
+    output_filename = "/kaggle/working/inference_result.png"
     plt.savefig(output_filename)
     print(f"✅ Success! Image saved to: {output_filename}")
     plt.close() # Close memory to free RAM
