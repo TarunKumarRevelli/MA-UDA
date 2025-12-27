@@ -100,7 +100,7 @@ def infer_cyclegan(source_path, checkpoint_path):
     plt.axis('off')
     
     # Save output
-    output_filename = "inference_comparison.png"
+    output_filename = "/kaggle/working/inference_comparison.png"
     plt.savefig(output_filename, bbox_inches='tight')
     print(f"✅ Comparison saved to: {output_filename}")
     plt.close()
