@@ -229,6 +229,144 @@
 # if __name__ == '__main__':
 #     main()
 
+# import torch
+# import torch.nn as nn
+# from torch.utils.data import DataLoader
+# import itertools
+# import os
+# from tqdm import tqdm
+# from models.cyclegan import Generator, Discriminator
+# from data.dataset import BrainSegmentationDataset, get_transforms
+# from utils.utils import ReplayBuffer
+
+# class CycleGANTrainer:
+#     def __init__(self, config):
+#         self.config = config
+#         self.device = config.device
+        
+#         # Paths
+#         os.makedirs(config.checkpoint_dir, exist_ok=True)
+#         os.makedirs(os.path.join(config.output_dir, 'images'), exist_ok=True)
+
+#         # 1. Initialize Models
+#         self.G_AB = Generator().to(self.device) # T1 -> T2
+#         self.G_BA = Generator().to(self.device) # T2 -> T1
+#         self.D_A = Discriminator().to(self.device)
+#         self.D_B = Discriminator().to(self.device)
+
+#         # 2. Losses
+#         self.criterion_GAN = torch.nn.MSELoss()
+#         self.criterion_cycle = torch.nn.L1Loss()
+#         self.criterion_identity = torch.nn.L1Loss()
+
+#         # 3. Optimizers
+#         self.optimizer_G = torch.optim.Adam(
+#             itertools.chain(self.G_AB.parameters(), self.G_BA.parameters()),
+#             lr=config.cyclegan_lr, betas=(0.5, 0.999)
+#         )
+#         self.optimizer_D_A = torch.optim.Adam(self.D_A.parameters(), lr=config.cyclegan_lr, betas=(0.5, 0.999))
+#         self.optimizer_D_B = torch.optim.Adam(self.D_B.parameters(), lr=config.cyclegan_lr, betas=(0.5, 0.999))
+
+#         # 4. Buffers
+#         self.fake_A_buffer = ReplayBuffer()
+#         self.fake_B_buffer = ReplayBuffer()
+
+#         # 5. Data (Unpaired)
+#         self.dataloader = DataLoader(
+#             BrainSegmentationDataset(config.source_images_path, config.source_masks_path, config.target_images_path, 
+#                                      transform=get_transforms(is_train=True), is_train=True),
+#             batch_size=config.cyclegan_batch_size, shuffle=True, num_workers=2
+#         )
+
+#     def load_checkpoint(self, path):
+#         print(f"🔄 Loading CycleGAN from {path}...")
+#         checkpoint = torch.load(path, map_location=self.device)
+        
+#         # Load Models (Handle key naming differences)
+#         if 'G_s2t' in checkpoint:
+#             self.G_AB.load_state_dict(checkpoint['G_s2t'])
+#             self.G_BA.load_state_dict(checkpoint['G_t2s'])
+#         else:
+#             self.G_AB.load_state_dict(checkpoint['G_AB'])
+#             self.G_BA.load_state_dict(checkpoint['G_BA'])
+            
+#         self.D_A.load_state_dict(checkpoint['D_A'])
+#         self.D_B.load_state_dict(checkpoint['D_B'])
+        
+#         # Load Optimizers
+#         self.optimizer_G.load_state_dict(checkpoint['optimizer_G'])
+#         self.optimizer_D_A.load_state_dict(checkpoint['optimizer_D_A'])
+#         self.optimizer_D_B.load_state_dict(checkpoint['optimizer_D_B'])
+        
+#         epoch = checkpoint.get('epoch', 0)
+#         print(f"✅ Successfully loaded Epoch {epoch}")
+#         return epoch
+
+#     def save_checkpoint(self, epoch):
+#         state = {
+#             'epoch': epoch,
+#             'G_s2t': self.G_AB.state_dict(),
+#             'G_t2s': self.G_BA.state_dict(),
+#             'D_A': self.D_A.state_dict(),
+#             'D_B': self.D_B.state_dict(),
+#             'optimizer_G': self.optimizer_G.state_dict(),
+#             'optimizer_D_A': self.optimizer_D_A.state_dict(),
+#             'optimizer_D_B': self.optimizer_D_B.state_dict()
+#         }
+#         path = os.path.join(self.config.checkpoint_dir, f'cyclegan_epoch_{epoch}.pth')
+#         torch.save(state, path)
+#         print(f"💾 Saved CycleGAN checkpoint: {path}")
+
+#     def train(self, start_epoch=0, total_epochs=100):
+#         print(f"🚀 Starting CycleGAN Training: Epoch {start_epoch} -> {total_epochs}")
+        
+#         for epoch in range(start_epoch, total_epochs):
+#             pbar = tqdm(self.dataloader, desc=f"Epoch {epoch+1}/{total_epochs}")
+            
+#             for i, batch in enumerate(pbar):
+#                 real_A = batch['source_img'].to(self.device)
+#                 real_B = batch['target_img'].to(self.device)
+
+#                 # --- Train Generators ---
+#                 self.optimizer_G.zero_grad()
+                
+#                 loss_id_A = self.criterion_identity(self.G_BA(real_A), real_A) * 5.0
+#                 loss_id_B = self.criterion_identity(self.G_AB(real_B), real_B) * 5.0
+                
+#                 fake_B = self.G_AB(real_A)
+#                 loss_GAN_AB = self.criterion_GAN(self.D_B(fake_B), torch.ones_like(self.D_B(fake_B)))
+                
+#                 fake_A = self.G_BA(real_B)
+#                 loss_GAN_BA = self.criterion_GAN(self.D_A(fake_A), torch.ones_like(self.D_A(fake_A)))
+                
+#                 rec_A = self.G_BA(fake_B)
+#                 loss_cycle_A = self.criterion_cycle(rec_A, real_A) * 10.0
+                
+#                 rec_B = self.G_AB(fake_A)
+#                 loss_cycle_B = self.criterion_cycle(rec_B, real_B) * 10.0
+                
+#                 loss_G = loss_id_A + loss_id_B + loss_GAN_AB + loss_GAN_BA + loss_cycle_A + loss_cycle_B
+#                 loss_G.backward()
+#                 self.optimizer_G.step()
+                
+#                 # --- Train Discriminators ---
+#                 self.optimizer_D_A.zero_grad()
+#                 loss_D_A = (self.criterion_GAN(self.D_A(real_A), torch.ones_like(self.D_A(real_A))) + 
+#                             self.criterion_GAN(self.D_A(self.fake_A_buffer.push_and_pop(fake_A).detach()), torch.zeros_like(self.D_A(fake_A)))) * 0.5
+#                 loss_D_A.backward()
+#                 self.optimizer_D_A.step()
+                
+#                 self.optimizer_D_B.zero_grad()
+#                 loss_D_B = (self.criterion_GAN(self.D_B(real_B), torch.ones_like(self.D_B(real_B))) + 
+#                             self.criterion_GAN(self.D_B(self.fake_B_buffer.push_and_pop(fake_B).detach()), torch.zeros_like(self.D_B(fake_B)))) * 0.5
+#                 loss_D_B.backward()
+#                 self.optimizer_D_B.step()
+                
+#                 pbar.set_postfix({'G_loss': loss_G.item()})
+
+#             if (epoch + 1) % 5 == 0:
+#                 self.save_checkpoint(epoch + 1)
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -271,7 +409,7 @@ class CycleGANTrainer:
         self.fake_A_buffer = ReplayBuffer()
         self.fake_B_buffer = ReplayBuffer()
 
-        # 5. Data (Unpaired)
+        # 5. Data
         self.dataloader = DataLoader(
             BrainSegmentationDataset(config.source_images_path, config.source_masks_path, config.target_images_path, 
                                      transform=get_transforms(is_train=True), is_train=True),
@@ -282,7 +420,7 @@ class CycleGANTrainer:
         print(f"🔄 Loading CycleGAN from {path}...")
         checkpoint = torch.load(path, map_location=self.device)
         
-        # Load Models (Handle key naming differences)
+        # Load Models
         if 'G_s2t' in checkpoint:
             self.G_AB.load_state_dict(checkpoint['G_s2t'])
             self.G_BA.load_state_dict(checkpoint['G_t2s'])
@@ -293,7 +431,7 @@ class CycleGANTrainer:
         self.D_A.load_state_dict(checkpoint['D_A'])
         self.D_B.load_state_dict(checkpoint['D_B'])
         
-        # Load Optimizers
+        # Load Optimizers (Crucial for Resuming!)
         self.optimizer_G.load_state_dict(checkpoint['optimizer_G'])
         self.optimizer_D_A.load_state_dict(checkpoint['optimizer_D_A'])
         self.optimizer_D_B.load_state_dict(checkpoint['optimizer_D_B'])
@@ -303,6 +441,7 @@ class CycleGANTrainer:
         return epoch
 
     def save_checkpoint(self, epoch):
+        # We save ALL parts needed to resume training perfectly
         state = {
             'epoch': epoch,
             'G_s2t': self.G_AB.state_dict(),
@@ -364,5 +503,5 @@ class CycleGANTrainer:
                 
                 pbar.set_postfix({'G_loss': loss_G.item()})
 
-            if (epoch + 1) % 5 == 0:
-                self.save_checkpoint(epoch + 1)
+            # 🟢 UPDATED: SAVE EVERY EPOCH
+            self.save_checkpoint(epoch + 1)
