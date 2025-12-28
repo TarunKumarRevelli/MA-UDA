@@ -143,7 +143,6 @@
 # if __name__ == '__main__':
 #     main()
 
-%%writefile main.py
 import argparse
 import os
 import torch
