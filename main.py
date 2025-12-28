@@ -143,6 +143,57 @@
 # if __name__ == '__main__':
 #     main()
 
+# import argparse
+# import os
+# import torch
+# from config.config import config
+# from train.train_segmentation import MAUDATrainer
+
+# def main():
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument('--stage', type=str, default='segmentation')
+#     parser.add_argument('--source_images', type=str, default="/kaggle/input/brats19-60-to-90-slices-0-to-3-relabelled/t1")
+#     parser.add_argument('--source_masks', type=str, default="/kaggle/input/brats19-60-to-90-slices-0-to-3-relabelled/seg")
+#     parser.add_argument('--target_images', type=str, default="/kaggle/input/brats19-60-to-90-slices-0-to-3-relabelled/t2")
+#     parser.add_argument('--output_dir', type=str, default="/kaggle/working/outputs")
+#     parser.add_argument('--checkpoint_dir', type=str, default="/kaggle/working/checkpoints")
+    
+#     # NEW ARGUMENT FOR RESUMING
+#     parser.add_argument('--resume', type=str, default=None, help='Path to .pth checkpoint to resume from')
+#     parser.add_argument('--start_epoch', type=int, default=0, help='Epoch number to start counting from')
+#     parser.add_argument('--total_epochs', type=int, default=24, help='Total epochs to train')
+
+#     args = parser.parse_args()
+    
+#     # Config Update
+#     config.source_images_path = args.source_images
+#     config.source_masks_path = args.source_masks
+#     config.target_images_path = args.target_images
+#     config.output_dir = args.output_dir
+#     config.checkpoint_dir = args.checkpoint_dir
+#     config.seg_epochs = args.total_epochs
+#     config.cyclegan_epochs = 15 # Fixed for your run
+
+#     print("="*40)
+#     print(f"🚀 STARTING TRAINER (Shift 2)")
+#     print(f"Goal: Train until Epoch {args.total_epochs}")
+#     print("="*40)
+
+#     trainer = MAUDATrainer(config)
+
+#     # RESUME LOGIC
+#     if args.resume and os.path.exists(args.resume):
+#         print(f"🔄 Resuming from: {args.resume}")
+#         trainer.load_weights_only(args.resume)
+#     else:
+#         print("⚠️ No resume path provided or file not found. Starting from scratch.")
+
+#     # START TRAINING
+#     trainer.train(start_epoch=args.start_epoch)
+
+# if __name__ == '__main__':
+#     main()
+
 import argparse
 import os
 import torch
@@ -158,10 +209,13 @@ def main():
     parser.add_argument('--output_dir', type=str, default="/kaggle/working/outputs")
     parser.add_argument('--checkpoint_dir', type=str, default="/kaggle/working/checkpoints")
     
-    # NEW ARGUMENT FOR RESUMING
+    # Resume args
     parser.add_argument('--resume', type=str, default=None, help='Path to .pth checkpoint to resume from')
     parser.add_argument('--start_epoch', type=int, default=0, help='Epoch number to start counting from')
     parser.add_argument('--total_epochs', type=int, default=24, help='Total epochs to train')
+    
+    # 🟢 NEW: Add Learning Rate Argument
+    parser.add_argument('--lr', type=float, default=None, help='Override learning rate')
 
     args = parser.parse_args()
     
@@ -172,11 +226,17 @@ def main():
     config.output_dir = args.output_dir
     config.checkpoint_dir = args.checkpoint_dir
     config.seg_epochs = args.total_epochs
-    config.cyclegan_epochs = 15 # Fixed for your run
+    config.cyclegan_epochs = 15
+    
+    # 🟢 APPLY LR OVERRIDE
+    if args.lr:
+        print(f"ℹ️ Overriding Learning Rate: {config.seg_lr} -> {args.lr}")
+        config.seg_lr = args.lr
 
     print("="*40)
-    print(f"🚀 STARTING TRAINER (Shift 2)")
+    print(f"🚀 STARTING TRAINER (Shift 3 - Cool Down)")
     print(f"Goal: Train until Epoch {args.total_epochs}")
+    print(f"Learning Rate: {config.seg_lr}")
     print("="*40)
 
     trainer = MAUDATrainer(config)
