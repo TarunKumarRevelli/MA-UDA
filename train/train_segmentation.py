@@ -533,201 +533,307 @@
 
 
 
-"""
-Training script for Segmentation with MA-UDA (Stage 2)
-OPTIMIZED: Sequential Backward Execution to fix OOM
-"""
+# """
+# Training script for Segmentation with MA-UDA (Stage 2)
+# OPTIMIZED: Sequential Backward Execution to fix OOM
+# """
+# import os
+# import torch
+# import torch.nn as nn
+# from torch.utils.data import DataLoader
+# from tqdm import tqdm
+# import numpy as np
+
+# import sys
+# sys.path.append('..')
+
+# from config.config import config
+# from data.dataset import BrainSegmentationDataset, get_transforms
+# from models.swin_transformer import SwinTransformerSegmentation
+# from models.cyclegan import Generator
+# from models.meta_attention import MetaAttention, AttentionAlignmentDiscriminator
+# from losses.losses import MAUDALoss
+
+# class MAUDATrainer:
+#     def __init__(self, config):
+#         print("Initializing MAUDATrainer (Sequential Mode)...")
+#         self.config = config
+#         self.device = config.device
+#         self.scaler = torch.cuda.amp.GradScaler()
+        
+#         # Create output directories
+#         os.makedirs(config.checkpoint_dir, exist_ok=True)
+#         os.makedirs(os.path.join(config.output_dir, 'predictions'), exist_ok=True)
+        
+#         # 🛑 FORCE SETTINGS
+#         print("!"*40)
+#         print("🛑 SEQUENTIAL GRADIENT MODE ACTIVE 🛑")
+#         forced_embed_dim = 48
+#         forced_img_size = 128
+#         print(f"-> Embed Dim: {forced_embed_dim}")
+#         print(f"-> Image Size: {forced_img_size}")
+#         print("!"*40)
+        
+#         # Initialize segmentation model
+#         self.seg_model = SwinTransformerSegmentation(
+#             img_size=forced_img_size,
+#             num_classes=config.num_classes,
+#             embed_dim=forced_embed_dim,
+#             depths=config.swin_depths,
+#             num_heads=config.swin_num_heads,
+#             use_checkpoint=True,
+#             window_size=4
+#         ).to(self.device)
+        
+#         # Load pre-trained CycleGAN generators
+#         self.G_s2t = Generator().to(self.device)
+#         self.G_t2s = Generator().to(self.device)
+#         self.load_cyclegan_generators()
+        
+#         # Freeze CycleGAN
+#         for param in self.G_s2t.parameters(): param.requires_grad = False
+#         for param in self.G_t2s.parameters(): param.requires_grad = False
+        
+#         # Meta Attention
+#         self.meta_attention = MetaAttention(
+#             num_heads=config.swin_num_heads[0],
+#             hidden_dim=forced_embed_dim
+#         ).to(self.device)
+        
+#         # Discriminators
+#         self.disc_s = AttentionAlignmentDiscriminator(input_size=64).to(self.device)
+#         self.disc_t = AttentionAlignmentDiscriminator(input_size=64).to(self.device)
+        
+#         # Optimizers
+#         self.optimizer_seg = torch.optim.SGD(
+#             list(self.seg_model.parameters()) + list(self.meta_attention.parameters()),
+#             lr=config.seg_lr, momentum=config.momentum, weight_decay=config.weight_decay
+#         )
+        
+#         self.optimizer_disc = torch.optim.Adam(
+#             list(self.disc_s.parameters()) + list(self.disc_t.parameters()),
+#             lr=config.discriminator_lr
+#         )
+        
+#         self.loss_fn = MAUDALoss(config)
+        
+#         # Data Loading
+#         transform = get_transforms(is_train=True)
+#         self.train_dataset = BrainSegmentationDataset(
+#             config.source_images_path, config.source_masks_path,
+#             config.target_images_path, transform=transform, is_train=True
+#         )
+#         # WORKERS=0 IS CRITICAL FOR YOUR SETUP
+#         self.train_loader = DataLoader(
+#             self.train_dataset,
+#             batch_size=config.seg_batch_size,
+#             shuffle=True,
+#             num_workers=0, 
+#             pin_memory=False,
+#             persistent_workers=False
+#         )
+    
+#     def load_cyclegan_generators(self):
+#         checkpoint_path = os.path.join(self.config.checkpoint_dir, 
+#                                       f'cyclegan_epoch_{self.config.cyclegan_epochs}.pth')
+#         if os.path.exists(checkpoint_path):
+#             print(f"Loading CycleGAN from {checkpoint_path}")
+#             checkpoint = torch.load(checkpoint_path, map_location=self.device)
+#             self.G_s2t.load_state_dict(checkpoint['G_s2t'])
+#             self.G_t2s.load_state_dict(checkpoint['G_t2s'])
+#         else:
+#             print("Warning: CycleGAN checkpoint not found!")
+
+#     def train_epoch(self, epoch):
+#         self.seg_model.train()
+#         self.G_s2t.eval()
+#         self.G_t2s.eval()
+        
+#         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.config.seg_epochs}")
+        
+#         for i, batch in enumerate(pbar):
+#             source_img = batch['source_img'].to(self.device)
+#             source_mask = batch['source_mask'].to(self.device)
+#             target_img = batch['target_img'].to(self.device)
+
+#             # 1. Generate Fake Images (No Gradients needed here)
+#             with torch.no_grad():
+#                 with torch.cuda.amp.autocast():
+#                     source_to_target = self.G_s2t(source_img)
+#                     target_to_source = self.G_t2s(target_img)
+
+#             # === SEQUENTIAL BACKWARD PASS START ===
+#             # We clear gradients once at the start
+#             self.optimizer_seg.zero_grad()
+            
+#             # --- STEP A: Source Domain (Real) ---
+#             with torch.cuda.amp.autocast():
+#                 pred_source = self.seg_model(source_img)
+#                 loss_s = self.loss_fn.seg_loss(pred_source, source_mask)
+#                 # Apply lambda immediately
+#                 term_s = loss_s * self.config.lambda_seg
+            
+#             # BACKWARD IMMEDIATELY -> Frees Graph A
+#             self.scaler.scale(term_s).backward()
+            
+#             # Capture attention for later (detach to save memory if needed)
+#             # attn_s = self.seg_model.get_attention_masks()[0].detach() 
+
+#             # --- STEP B: Fake Target Domain (S -> T) ---
+#             with torch.cuda.amp.autocast():
+#                 pred_s2t = self.seg_model(source_to_target)
+#                 loss_s2t = self.loss_fn.seg_loss(pred_s2t, source_mask)
+#                 term_s2t = loss_s2t * self.config.lambda_seg
+            
+#             # BACKWARD IMMEDIATELY -> Frees Graph B
+#             self.scaler.scale(term_s2t).backward()
+
+#             # --- STEP C: Target Consistency (Real T vs Fake S) ---
+#             with torch.cuda.amp.autocast():
+#                 pred_t = self.seg_model(target_img)
+#                 pred_t2s = self.seg_model(target_to_source)
+#                 loss_cons = self.loss_fn.pred_consistency_loss(pred_t, pred_t2s)
+#                 term_cons = loss_cons * self.config.lambda_pred
+            
+#             # BACKWARD IMMEDIATELY -> Frees Graph C
+#             self.scaler.scale(term_cons).backward()
+
+#             # --- STEP D: Meta Attention (Optional/Lightweight) ---
+#             # Note: For strict OOM prevention, we skip backpropping meta-attention 
+#             # to the backbone in this simplified loop, but we can train discriminator.
+#             # To enable full MA-UDA, we would need 24GB+ VRAM or huge checkpointing.
+#             # For now, we skip it to ensure segmentation works.
+            
+#             # UPDATE WEIGHTS
+#             self.scaler.step(self.optimizer_seg)
+#             self.scaler.update()
+#             # === SEQUENTIAL BACKWARD PASS END ===
+
+#             # Logging stats (Approximation)
+#             total_loss = term_s.item() + term_s2t.item() + term_cons.item()
+#             pbar.set_postfix({'loss': f"{total_loss:.4f}"})
+
+#     def save_checkpoint(self, epoch, dice_score):
+#         checkpoint = {
+#             'epoch': epoch,
+#             'seg_model': self.seg_model.state_dict(),
+#             'optimizer_seg': self.optimizer_seg.state_dict(),
+#         }
+#         path = os.path.join(self.config.checkpoint_dir, f'seg_epoch_{epoch+1}.pth')
+#         torch.save(checkpoint, path)
+#         print(f"Saved checkpoint: {path}")
+    
+#     def train(self):
+#         print("Starting MA-UDA segmentation training...")
+#         for epoch in range(self.config.seg_epochs):
+#             self.train_epoch(epoch)
+#             if (epoch + 1) % self.config.save_interval == 0:
+#                 self.save_checkpoint(epoch, 0.0)
+#         self.save_checkpoint(self.config.seg_epochs-1, 0.0)
+#         print("MA-UDA training completed!")
+
+
 import os
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-import numpy as np
-
-import sys
-sys.path.append('..')
-
 from config.config import config
 from data.dataset import BrainSegmentationDataset, get_transforms
 from models.swin_transformer import SwinTransformerSegmentation
 from models.cyclegan import Generator
 from models.meta_attention import MetaAttention, AttentionAlignmentDiscriminator
-from losses.losses import MAUDALoss
+from losses.losses import SegmentationLoss, MAUDALoss # Ensure MAUDALoss is in losses.py or defined here
 
 class MAUDATrainer:
     def __init__(self, config):
-        print("Initializing MAUDATrainer (Sequential Mode)...")
         self.config = config
         self.device = config.device
         self.scaler = torch.cuda.amp.GradScaler()
         
-        # Create output directories
+        # Initialize Output Dirs
         os.makedirs(config.checkpoint_dir, exist_ok=True)
         os.makedirs(os.path.join(config.output_dir, 'predictions'), exist_ok=True)
-        
-        # 🛑 FORCE SETTINGS
-        print("!"*40)
-        print("🛑 SEQUENTIAL GRADIENT MODE ACTIVE 🛑")
-        forced_embed_dim = 48
-        forced_img_size = 128
-        print(f"-> Embed Dim: {forced_embed_dim}")
-        print(f"-> Image Size: {forced_img_size}")
-        print("!"*40)
-        
-        # Initialize segmentation model
+
+        # Models
         self.seg_model = SwinTransformerSegmentation(
-            img_size=forced_img_size,
-            num_classes=config.num_classes,
-            embed_dim=forced_embed_dim,
-            depths=config.swin_depths,
-            num_heads=config.swin_num_heads,
-            use_checkpoint=True,
-            window_size=4
+            img_size=128, num_classes=4, embed_dim=48, 
+            depths=config.swin_depths, num_heads=config.swin_num_heads, window_size=4
         ).to(self.device)
         
-        # Load pre-trained CycleGAN generators
+        # CycleGAN (Frozen)
         self.G_s2t = Generator().to(self.device)
         self.G_t2s = Generator().to(self.device)
-        self.load_cyclegan_generators()
+        self.load_cyclegan()
+        for p in self.G_s2t.parameters(): p.requires_grad = False
+        for p in self.G_t2s.parameters(): p.requires_grad = False
         
-        # Freeze CycleGAN
-        for param in self.G_s2t.parameters(): param.requires_grad = False
-        for param in self.G_t2s.parameters(): param.requires_grad = False
+        # Optims
+        self.optimizer_seg = torch.optim.SGD(self.seg_model.parameters(), lr=config.seg_lr, momentum=0.9)
         
-        # Meta Attention
-        self.meta_attention = MetaAttention(
-            num_heads=config.swin_num_heads[0],
-            hidden_dim=forced_embed_dim
-        ).to(self.device)
-        
-        # Discriminators
-        self.disc_s = AttentionAlignmentDiscriminator(input_size=64).to(self.device)
-        self.disc_t = AttentionAlignmentDiscriminator(input_size=64).to(self.device)
-        
-        # Optimizers
-        self.optimizer_seg = torch.optim.SGD(
-            list(self.seg_model.parameters()) + list(self.meta_attention.parameters()),
-            lr=config.seg_lr, momentum=config.momentum, weight_decay=config.weight_decay
-        )
-        
-        self.optimizer_disc = torch.optim.Adam(
-            list(self.disc_s.parameters()) + list(self.disc_t.parameters()),
-            lr=config.discriminator_lr
-        )
-        
-        self.loss_fn = MAUDALoss(config)
-        
-        # Data Loading
-        transform = get_transforms(is_train=True)
-        self.train_dataset = BrainSegmentationDataset(
-            config.source_images_path, config.source_masks_path,
-            config.target_images_path, transform=transform, is_train=True
-        )
-        # WORKERS=0 IS CRITICAL FOR YOUR SETUP
+        # Loss (Uses the Weighted SegmentationLoss from Step 1)
+        self.loss_fn = SegmentationLoss().to(self.device) 
+
+        # Data
         self.train_loader = DataLoader(
-            self.train_dataset,
-            batch_size=config.seg_batch_size,
-            shuffle=True,
-            num_workers=0, 
-            pin_memory=False,
-            persistent_workers=False
+            BrainSegmentationDataset(config.source_images_path, config.source_masks_path, config.target_images_path, transform=get_transforms(True), is_train=True),
+            batch_size=config.seg_batch_size, shuffle=True, num_workers=0, pin_memory=False
         )
-    
-    def load_cyclegan_generators(self):
-        checkpoint_path = os.path.join(self.config.checkpoint_dir, 
-                                      f'cyclegan_epoch_{self.config.cyclegan_epochs}.pth')
-        if os.path.exists(checkpoint_path):
-            print(f"Loading CycleGAN from {checkpoint_path}")
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
-            self.G_s2t.load_state_dict(checkpoint['G_s2t'])
-            self.G_t2s.load_state_dict(checkpoint['G_t2s'])
+
+    def load_cyclegan(self):
+        path = os.path.join(self.config.checkpoint_dir, f'cyclegan_epoch_{self.config.cyclegan_epochs}.pth')
+        if os.path.exists(path):
+            chk = torch.load(path, map_location=self.device)
+            self.G_s2t.load_state_dict(chk['G_s2t'])
+            self.G_t2s.load_state_dict(chk['G_t2s'])
+            print("✅ CycleGAN Loaded")
         else:
-            print("Warning: CycleGAN checkpoint not found!")
+            print("⚠️ CycleGAN NOT Found! (Random Init)")
 
     def train_epoch(self, epoch):
         self.seg_model.train()
-        self.G_s2t.eval()
-        self.G_t2s.eval()
+        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}")
         
-        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.config.seg_epochs}")
-        
-        for i, batch in enumerate(pbar):
-            source_img = batch['source_img'].to(self.device)
-            source_mask = batch['source_mask'].to(self.device)
-            target_img = batch['target_img'].to(self.device)
+        for batch in pbar:
+            src_img = batch['source_img'].to(self.device)
+            src_mask = batch['source_mask'].to(self.device)
+            tgt_img = batch['target_img'].to(self.device)
 
-            # 1. Generate Fake Images (No Gradients needed here)
+            # 1. Generate Fake (No Grad)
             with torch.no_grad():
                 with torch.cuda.amp.autocast():
-                    source_to_target = self.G_s2t(source_img)
-                    target_to_source = self.G_t2s(target_img)
+                    fake_tgt = self.G_s2t(src_img)
 
-            # === SEQUENTIAL BACKWARD PASS START ===
-            # We clear gradients once at the start
             self.optimizer_seg.zero_grad()
-            
-            # --- STEP A: Source Domain (Real) ---
-            with torch.cuda.amp.autocast():
-                pred_source = self.seg_model(source_img)
-                loss_s = self.loss_fn.seg_loss(pred_source, source_mask)
-                # Apply lambda immediately
-                term_s = loss_s * self.config.lambda_seg
-            
-            # BACKWARD IMMEDIATELY -> Frees Graph A
-            self.scaler.scale(term_s).backward()
-            
-            # Capture attention for later (detach to save memory if needed)
-            # attn_s = self.seg_model.get_attention_masks()[0].detach() 
 
-            # --- STEP B: Fake Target Domain (S -> T) ---
+            # 2. Sequential Backward A (Real Source)
             with torch.cuda.amp.autocast():
-                pred_s2t = self.seg_model(source_to_target)
-                loss_s2t = self.loss_fn.seg_loss(pred_s2t, source_mask)
-                term_s2t = loss_s2t * self.config.lambda_seg
+                pred_src = self.seg_model(src_img)
+                loss_s = self.loss_fn(pred_src, src_mask)
+            self.scaler.scale(loss_s).backward()
             
-            # BACKWARD IMMEDIATELY -> Frees Graph B
-            self.scaler.scale(term_s2t).backward()
-
-            # --- STEP C: Target Consistency (Real T vs Fake S) ---
+            # 3. Sequential Backward B (Fake Target)
             with torch.cuda.amp.autocast():
-                pred_t = self.seg_model(target_img)
-                pred_t2s = self.seg_model(target_to_source)
-                loss_cons = self.loss_fn.pred_consistency_loss(pred_t, pred_t2s)
-                term_cons = loss_cons * self.config.lambda_pred
-            
-            # BACKWARD IMMEDIATELY -> Frees Graph C
-            self.scaler.scale(term_cons).backward()
+                pred_fake = self.seg_model(fake_tgt)
+                loss_f = self.loss_fn(pred_fake, src_mask)
+            self.scaler.scale(loss_f).backward()
 
-            # --- STEP D: Meta Attention (Optional/Lightweight) ---
-            # Note: For strict OOM prevention, we skip backpropping meta-attention 
-            # to the backbone in this simplified loop, but we can train discriminator.
-            # To enable full MA-UDA, we would need 24GB+ VRAM or huge checkpointing.
-            # For now, we skip it to ensure segmentation works.
-            
-            # UPDATE WEIGHTS
             self.scaler.step(self.optimizer_seg)
             self.scaler.update()
-            # === SEQUENTIAL BACKWARD PASS END ===
+            
+            pbar.set_postfix({'loss': (loss_s.item() + loss_f.item())})
 
-            # Logging stats (Approximation)
-            total_loss = term_s.item() + term_s2t.item() + term_cons.item()
-            pbar.set_postfix({'loss': f"{total_loss:.4f}"})
+    def save_checkpoint(self, epoch):
+        torch.save({'seg_model': self.seg_model.state_dict()}, 
+                   os.path.join(self.config.checkpoint_dir, f'seg_epoch_{epoch+1}.pth'))
 
-    def save_checkpoint(self, epoch, dice_score):
-        checkpoint = {
-            'epoch': epoch,
-            'seg_model': self.seg_model.state_dict(),
-            'optimizer_seg': self.optimizer_seg.state_dict(),
-        }
-        path = os.path.join(self.config.checkpoint_dir, f'seg_epoch_{epoch+1}.pth')
-        torch.save(checkpoint, path)
-        print(f"Saved checkpoint: {path}")
-    
-    def train(self):
-        print("Starting MA-UDA segmentation training...")
-        for epoch in range(self.config.seg_epochs):
+    def load_weights_only(self, path):
+        chk = torch.load(path, map_location=self.device)
+        self.seg_model.load_state_dict(chk['seg_model'])
+        print(f"✅ Loaded weights from {path} (Optimizer Reset)")
+
+    def train(self, start_epoch=0):
+        for epoch in range(start_epoch, self.config.seg_epochs):
             self.train_epoch(epoch)
-            if (epoch + 1) % self.config.save_interval == 0:
-                self.save_checkpoint(epoch, 0.0)
-        self.save_checkpoint(self.config.seg_epochs-1, 0.0)
-        print("MA-UDA training completed!")
+            if (epoch+1) % self.config.save_interval == 0:
+                self.save_checkpoint(epoch)

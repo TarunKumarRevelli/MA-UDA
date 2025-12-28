@@ -39,18 +39,38 @@ class DiceLoss(nn.Module):
         # Return mean dice loss across classes
         return 1 - dice.mean()
 
+class FastDiceLoss(nn.Module):
+    def __init__(self, smooth=1e-5):
+        super(FastDiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, pred, target):
+        pred = F.softmax(pred, dim=1)
+        num_classes = pred.shape[1]
+        target_one_hot = F.one_hot(target, num_classes).permute(0, 3, 1, 2).float()
+        intersection = torch.sum(pred * target_one_hot, dim=(2, 3))
+        union = torch.sum(pred, dim=(2, 3)) + torch.sum(target_one_hot, dim=(2, 3))
+        dice = (2. * intersection + self.smooth) / (union + self.smooth)
+        return 1.0 - dice.mean()
+
 class SegmentationLoss(nn.Module):
-    """Combined Cross Entropy and Dice Loss"""
-    
     def __init__(self):
         super(SegmentationLoss, self).__init__()
-        self.ce_loss = nn.CrossEntropyLoss()
-        self.dice_loss = DiceLoss()
+        # 🟢 THE FIX: 10x penalty for missing tumors
+        weights = torch.tensor([1.0, 10.0, 10.0, 10.0]).cuda()
+        self.ce_loss = nn.CrossEntropyLoss(weight=weights)
+        self.dice_loss = FastDiceLoss() 
     
     def forward(self, pred, target):
         ce = self.ce_loss(pred, target)
         dice = self.dice_loss(pred, target)
-        return ce + dice
+        return ce + (2.0 * dice)
+    
+    def forward(self, pred, target):
+        # We use standard CE + 2x Dice to encourage blob shapes
+        ce = self.ce_loss(pred, target)
+        dice = self.dice_loss(pred, target)
+        return ce + (2.0 * dice)
 
 class CycleConsistencyLoss(nn.Module):
     """Cycle consistency loss for CycleGAN"""
