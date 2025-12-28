@@ -56,18 +56,15 @@ class FastDiceLoss(nn.Module):
 class SegmentationLoss(nn.Module):
     def __init__(self):
         super(SegmentationLoss, self).__init__()
-        # 🟢 THE FIX: 10x penalty for missing tumors
-        weights = torch.tensor([1.0, 10.0, 10.0, 10.0]).cuda()
+        
+        # 🟢 THE FIX: CALM DOWN WEIGHTS (10.0 -> 4.0)
+        # We lower the penalty so it stops predicting tumor everywhere
+        weights = torch.tensor([1.0, 4.0, 4.0, 4.0]).cuda()
+        
         self.ce_loss = nn.CrossEntropyLoss(weight=weights)
         self.dice_loss = FastDiceLoss() 
     
     def forward(self, pred, target):
-        ce = self.ce_loss(pred, target)
-        dice = self.dice_loss(pred, target)
-        return ce + (2.0 * dice)
-    
-    def forward(self, pred, target):
-        # We use standard CE + 2x Dice to encourage blob shapes
         ce = self.ce_loss(pred, target)
         dice = self.dice_loss(pred, target)
         return ce + (2.0 * dice)

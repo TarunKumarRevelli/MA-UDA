@@ -48,7 +48,7 @@ class Config:
         
         # Visualization
         self.vis_interval = 10
-        self.save_interval = 5
+        self.save_interval = 2
 
         self.debug = False
 
