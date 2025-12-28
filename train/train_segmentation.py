@@ -732,7 +732,6 @@
 #         self.save_checkpoint(self.config.seg_epochs-1, 0.0)
 #         print("MA-UDA training completed!")
 
-
 import os
 import torch
 import torch.nn as nn

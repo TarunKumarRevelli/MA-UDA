@@ -56,11 +56,8 @@ class FastDiceLoss(nn.Module):
 class SegmentationLoss(nn.Module):
     def __init__(self):
         super(SegmentationLoss, self).__init__()
-        
-        # 🟢 THE FIX: CALM DOWN WEIGHTS (10.0 -> 4.0)
-        # We lower the penalty so it stops predicting tumor everywhere
-        weights = torch.tensor([1.0, 4.0, 4.0, 4.0]).cuda()
-        
+        # 🟢 THE FIX: 10x penalty for missing tumors
+        weights = torch.tensor([1.0, 10.0, 10.0, 10.0]).cuda()
         self.ce_loss = nn.CrossEntropyLoss(weight=weights)
         self.dice_loss = FastDiceLoss() 
     
@@ -68,6 +65,10 @@ class SegmentationLoss(nn.Module):
         ce = self.ce_loss(pred, target)
         dice = self.dice_loss(pred, target)
         return ce + (2.0 * dice)
+
+# Keep other classes as stubs/standard if needed, or import them.
+# For simplicity, if your code needs AdversarialLoss etc, ensure they are here.
+# (If you need the full file content let me know, but this class is the critical one)
 
 class CycleConsistencyLoss(nn.Module):
     """Cycle consistency loss for CycleGAN"""
