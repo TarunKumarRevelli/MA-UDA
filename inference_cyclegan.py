@@ -108,6 +108,6 @@ def infer_cyclegan(source_path, checkpoint_path):
 # --- RUN IT ---
 # Update these paths to match your folder structure exactly
 test_img = "/kaggle/input/brats19-60-to-90-slices-0-to-3-relabelled/t1/BraTS19_2013_10_1_s75.npy"
-chk_path = "/kaggle/input/cyclegan-15/pytorch/default/1/cyclegan_epoch_15.pth"
+chk_path = "/kaggle/input/cyclegan-35/pytorch/default/1/cyclegan_epoch_35.pth"
 
 infer_cyclegan(test_img, chk_path)
