@@ -731,8 +731,8 @@
 #                 self.save_checkpoint(epoch, 0.0)
 #         self.save_checkpoint(self.config.seg_epochs-1, 0.0)
 #         print("MA-UDA training completed!")
-
 import os
+import glob
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -741,16 +741,15 @@ from config.config import config
 from data.dataset import BrainSegmentationDataset, get_transforms
 from models.swin_transformer import SwinTransformerSegmentation
 from models.cyclegan import Generator
-from losses.losses import SegmentationLoss 
+from losses.losses import SegmentationLoss
 
 class MAUDATrainer:
     def __init__(self, config):
         self.config = config
         self.device = config.device
-        # Updated scaler for newer PyTorch versions
         self.scaler = torch.amp.GradScaler('cuda')
         
-        # Initialize Output Dirs
+        # Output Dirs
         os.makedirs(config.checkpoint_dir, exist_ok=True)
         os.makedirs(os.path.join(config.output_dir, 'predictions'), exist_ok=True)
 
@@ -762,14 +761,10 @@ class MAUDATrainer:
         
         # CycleGAN (Frozen)
         self.G_s2t = Generator().to(self.device)
-        # Note: We usually only need G_s2t (Source -> Target) for the consistency loss
-        
         self.load_cyclegan() 
-        
-        # Freeze CycleGAN
         for p in self.G_s2t.parameters(): p.requires_grad = False
         
-        # Optims
+        # Optimizer
         self.optimizer_seg = torch.optim.SGD(self.seg_model.parameters(), lr=config.seg_lr, momentum=0.9)
         
         # Loss
@@ -782,22 +777,14 @@ class MAUDATrainer:
         )
 
     def load_cyclegan(self):
-        # 🟢 MODIFIED: Point directly to your Epoch 99 file
+        # 🟢 Hardcoded to your Best CycleGAN (Epoch 99)
         path = "/kaggle/input/cyclegan-99/pytorch/default/1/cyclegan_epoch_99.pth"
         
         if os.path.exists(path):
             print(f"🔄 Loading CycleGAN from: {path}")
             chk = torch.load(path, map_location=self.device)
-            
-            # Handle variable key names (G_s2t vs G_AB)
-            if 'G_s2t' in chk: 
-                self.G_s2t.load_state_dict(chk['G_s2t'])
-            elif 'G_AB' in chk: 
-                self.G_s2t.load_state_dict(chk['G_AB'])
-            else:
-                print(f"⚠️ Keys found: {chk.keys()}")
-                raise KeyError("Could not find Generator state_dict in checkpoint")
-                
+            if 'G_s2t' in chk: self.G_s2t.load_state_dict(chk['G_s2t'])
+            elif 'G_AB' in chk: self.G_s2t.load_state_dict(chk['G_AB'])
             print("✅ CycleGAN Brain Installed (Epoch 99)")
         else:
             print(f"❌ CRITICAL ERROR: CycleGAN file not found at {path}")
@@ -811,20 +798,17 @@ class MAUDATrainer:
             src_img = batch['source_img'].to(self.device)
             src_mask = batch['source_mask'].to(self.device)
             
-            # 1. Generate Fake (No Grad)
             with torch.no_grad():
                 with torch.amp.autocast('cuda'):
                     fake_tgt = self.G_s2t(src_img)
 
             self.optimizer_seg.zero_grad()
 
-            # 2. Sequential Backward A (Real Source)
             with torch.amp.autocast('cuda'):
                 pred_src = self.seg_model(src_img)
                 loss_s = self.loss_fn(pred_src, src_mask)
             self.scaler.scale(loss_s).backward()
             
-            # 3. Sequential Backward B (Fake Target - Consistency)
             with torch.amp.autocast('cuda'):
                 pred_fake = self.seg_model(fake_tgt)
                 loss_f = self.loss_fn(pred_fake, src_mask)
@@ -835,14 +819,53 @@ class MAUDATrainer:
             
             pbar.set_postfix({'loss': (loss_s.item() + loss_f.item())})
 
+    def manage_storage(self, max_keep=3):
+        """Deletes old checkpoints to save disk space"""
+        # Find all seg checkpoints
+        files = glob.glob(os.path.join(self.config.checkpoint_dir, "seg_epoch_*.pth"))
+        
+        if len(files) <= max_keep:
+            return
+
+        # Sort files by epoch number (integer)
+        # Assumes format "seg_epoch_X.pth"
+        try:
+            files.sort(key=lambda x: int(x.split('_')[-1].replace('.pth', '')))
+            
+            # Identify files to delete (all except last N)
+            files_to_delete = files[:-max_keep]
+            
+            for f in files_to_delete:
+                os.remove(f)
+                print(f"🗑️ Cleaned up old checkpoint: {os.path.basename(f)}")
+        except Exception as e:
+            print(f"⚠️ Warning: Auto-cleanup failed: {e}")
+
     def save_checkpoint(self, epoch):
-        torch.save({'seg_model': self.seg_model.state_dict()}, 
-                   os.path.join(self.config.checkpoint_dir, f'seg_epoch_{epoch+1}.pth'))
+        # 1. Clean up FIRST to make room
+        self.manage_storage(max_keep=2)
+        
+        # 2. Save New Checkpoint
+        state = {
+            'epoch': epoch + 1,
+            'seg_model': self.seg_model.state_dict(),
+            'optimizer': self.optimizer_seg.state_dict(),
+            'scaler': self.scaler.state_dict()
+        }
+        path = os.path.join(self.config.checkpoint_dir, f'seg_epoch_{epoch+1}.pth')
+        torch.save(state, path)
+        print(f"💾 Saved checkpoint: seg_epoch_{epoch+1}.pth")
 
     def load_weights_only(self, path):
         chk = torch.load(path, map_location=self.device)
         self.seg_model.load_state_dict(chk['seg_model'])
-        print(f"✅ Loaded weights from {path} (Optimizer Reset)")
+        
+        if 'optimizer' in chk:
+            self.optimizer_seg.load_state_dict(chk['optimizer'])
+            self.scaler.load_state_dict(chk['scaler'])
+            print(f"✅ Full Resume Successful (Weights + Optimizer) from {path}")
+        else:
+            print(f"⚠️ Partial Load (Weights Only - Optimizer Reset) from {path}")
 
     def train(self, start_epoch=0):
         for epoch in range(start_epoch, self.config.seg_epochs):
