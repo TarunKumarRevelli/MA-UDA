@@ -39,6 +39,10 @@ class DiceLoss(nn.Module):
         # Return mean dice loss across classes
         return 1 - dice.mean()
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 class FastDiceLoss(nn.Module):
     def __init__(self, smooth=1e-5):
         super(FastDiceLoss, self).__init__()
@@ -57,8 +61,8 @@ class SegmentationLoss(nn.Module):
     def __init__(self):
         super(SegmentationLoss, self).__init__()
         
-        # 🟢 WEIGHTS: 4.0
-        # High enough to care, low enough to stay calm.
+        # 🟢 MASTER RUN WEIGHTS: 4.0
+        # This is the "Sweet Spot" for stable growth
         weights = torch.tensor([1.0, 4.0, 4.0, 4.0]).cuda()
         
         self.ce_loss = nn.CrossEntropyLoss(weight=weights)
@@ -67,7 +71,7 @@ class SegmentationLoss(nn.Module):
     def forward(self, pred, target):
         ce = self.ce_loss(pred, target)
         dice = self.dice_loss(pred, target)
-        # 🟢 DICE BOOST: We emphasize Dice (3.0x) to encourage "filling the shape"
+        # 🟢 DICE BOOST: 3x
         return ce + (3.0 * dice)
 
 # Keep other classes as stubs/standard if needed, or import them.

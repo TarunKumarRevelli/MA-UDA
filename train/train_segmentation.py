@@ -741,14 +741,14 @@ from config.config import config
 from data.dataset import BrainSegmentationDataset, get_transforms
 from models.swin_transformer import SwinTransformerSegmentation
 from models.cyclegan import Generator
-from models.meta_attention import MetaAttention, AttentionAlignmentDiscriminator
-from losses.losses import SegmentationLoss, MAUDALoss # Ensure MAUDALoss is in losses.py or defined here
+from losses.losses import SegmentationLoss 
 
 class MAUDATrainer:
     def __init__(self, config):
         self.config = config
         self.device = config.device
-        self.scaler = torch.cuda.amp.GradScaler()
+        # Updated scaler for newer PyTorch versions
+        self.scaler = torch.amp.GradScaler('cuda')
         
         # Initialize Output Dirs
         os.makedirs(config.checkpoint_dir, exist_ok=True)
@@ -762,15 +762,17 @@ class MAUDATrainer:
         
         # CycleGAN (Frozen)
         self.G_s2t = Generator().to(self.device)
-        self.G_t2s = Generator().to(self.device)
-        self.load_cyclegan()
+        # Note: We usually only need G_s2t (Source -> Target) for the consistency loss
+        
+        self.load_cyclegan() 
+        
+        # Freeze CycleGAN
         for p in self.G_s2t.parameters(): p.requires_grad = False
-        for p in self.G_t2s.parameters(): p.requires_grad = False
         
         # Optims
         self.optimizer_seg = torch.optim.SGD(self.seg_model.parameters(), lr=config.seg_lr, momentum=0.9)
         
-        # Loss (Uses the Weighted SegmentationLoss from Step 1)
+        # Loss
         self.loss_fn = SegmentationLoss().to(self.device) 
 
         # Data
@@ -780,14 +782,26 @@ class MAUDATrainer:
         )
 
     def load_cyclegan(self):
-        path = os.path.join(self.config.checkpoint_dir, f'cyclegan_epoch_{self.config.cyclegan_epochs}.pth')
+        # 🟢 MODIFIED: Point directly to your Epoch 99 file
+        path = "/kaggle/input/cyclegan-99/pytorch/default/1/cyclegan_epoch_99.pth"
+        
         if os.path.exists(path):
+            print(f"🔄 Loading CycleGAN from: {path}")
             chk = torch.load(path, map_location=self.device)
-            self.G_s2t.load_state_dict(chk['G_s2t'])
-            self.G_t2s.load_state_dict(chk['G_t2s'])
-            print("✅ CycleGAN Loaded")
+            
+            # Handle variable key names (G_s2t vs G_AB)
+            if 'G_s2t' in chk: 
+                self.G_s2t.load_state_dict(chk['G_s2t'])
+            elif 'G_AB' in chk: 
+                self.G_s2t.load_state_dict(chk['G_AB'])
+            else:
+                print(f"⚠️ Keys found: {chk.keys()}")
+                raise KeyError("Could not find Generator state_dict in checkpoint")
+                
+            print("✅ CycleGAN Brain Installed (Epoch 99)")
         else:
-            print("⚠️ CycleGAN NOT Found! (Random Init)")
+            print(f"❌ CRITICAL ERROR: CycleGAN file not found at {path}")
+            raise FileNotFoundError(f"Missing: {path}")
 
     def train_epoch(self, epoch):
         self.seg_model.train()
@@ -796,23 +810,22 @@ class MAUDATrainer:
         for batch in pbar:
             src_img = batch['source_img'].to(self.device)
             src_mask = batch['source_mask'].to(self.device)
-            tgt_img = batch['target_img'].to(self.device)
-
+            
             # 1. Generate Fake (No Grad)
             with torch.no_grad():
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     fake_tgt = self.G_s2t(src_img)
 
             self.optimizer_seg.zero_grad()
 
             # 2. Sequential Backward A (Real Source)
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 pred_src = self.seg_model(src_img)
                 loss_s = self.loss_fn(pred_src, src_mask)
             self.scaler.scale(loss_s).backward()
             
-            # 3. Sequential Backward B (Fake Target)
-            with torch.cuda.amp.autocast():
+            # 3. Sequential Backward B (Fake Target - Consistency)
+            with torch.amp.autocast('cuda'):
                 pred_fake = self.seg_model(fake_tgt)
                 loss_f = self.loss_fn(pred_fake, src_mask)
             self.scaler.scale(loss_f).backward()
