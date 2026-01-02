@@ -755,7 +755,7 @@ class MAUDATrainer:
 
         # Models
         self.seg_model = SwinTransformerSegmentation(
-            img_size=128, num_classes=4, embed_dim=48, 
+            img_size=128, num_classes=4, embed_dim=config.swin_embed_dim, 
             depths=config.swin_depths, num_heads=config.swin_num_heads, window_size=4
         ).to(self.device)
         
