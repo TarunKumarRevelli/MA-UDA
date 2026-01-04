@@ -209,7 +209,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
     pbar = tqdm(dataloader, desc="Training")
     for images, masks in pbar:
         images = images.to(device)
-        masks = masks.to(device)
+        masks = masks.to(device).long()
         
         # Forward pass
         optimizer.zero_grad()
@@ -243,7 +243,7 @@ def validate_epoch(model, dataloader, criterion, device):
         pbar = tqdm(dataloader, desc="Validation")
         for images, masks in pbar:
             images = images.to(device)
-            masks = masks.to(device)
+            masks = masks.to(device).long()
             
             outputs = model(images)
             loss = criterion(outputs, masks)
