@@ -135,6 +135,9 @@ class DiceLoss(nn.Module):
         # Convert predictions to probabilities
         predictions = torch.softmax(predictions, dim=1)
         
+        # FIX: Force targets to be LongTensor for one_hot compatibility
+        targets = targets.long() 
+        
         # One-hot encode targets
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=num_classes)
         targets_one_hot = targets_one_hot.permute(0, 3, 1, 2).float()
