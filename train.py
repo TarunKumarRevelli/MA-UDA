@@ -347,7 +347,7 @@ def train_segmentation_model(
     criterion = CombinedLoss(num_classes=num_classes, dice_weight=0.5, ce_weight=0.5)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=5, verbose=False
+        optimizer, mode='max', factor=0.5, patience=5
     )
     
     # Training loop
