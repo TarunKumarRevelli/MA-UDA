@@ -83,7 +83,7 @@ class BrainTumorDataset(Dataset):
 
 
 # ============================================================================
-# DATA AUGMENTATION
+# DATA AUGMENTATION (CORRECTED)
 # ============================================================================
 
 def get_train_transform(img_size=256):
@@ -96,8 +96,8 @@ def get_train_transform(img_size=256):
         A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=15, p=0.5),
         A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
         A.GaussNoise(var_limit=(10.0, 50.0), p=0.3),
-        # Convert grayscale to 3-channel (required by pretrained models)
-        A.Lambda(image=lambda x: np.stack([x, x, x], axis=-1)),
+        # FIX: Add **kwargs to accept extra args passed by Albumentations
+        A.Lambda(image=lambda x, **kwargs: np.stack([x, x, x], axis=-1)),
         ToTensorV2()
     ])
 
@@ -106,7 +106,8 @@ def get_val_transform(img_size=256):
     """Validation transform (no augmentation)"""
     return A.Compose([
         A.Resize(img_size, img_size),
-        A.Lambda(image=lambda x: np.stack([x, x, x], axis=-1)),
+        # FIX: Add **kwargs here as well
+        A.Lambda(image=lambda x, **kwargs: np.stack([x, x, x], axis=-1)),
         ToTensorV2()
     ])
 
@@ -318,7 +319,7 @@ def train_segmentation_model(
     
     # Create datasets
     train_dataset = BrainTumorDataset(
-        train_img, train_mask, transform=get_train_transform()
+        train_img, train_mask, transform=get_train_transform(img_size)
     )
     val_dataset = BrainTumorDataset(
         val_img, val_mask, transform=get_val_transform(img_size)
