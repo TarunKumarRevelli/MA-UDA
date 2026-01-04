@@ -59,8 +59,9 @@ def get_inference_transform(img_size=256):
     """Transform pipeline for inference"""
     return A.Compose([
         A.Resize(img_size, img_size),
-        A.Lambda(image=lambda x: x.astype(np.float32) / 255.0),
-        A.Lambda(image=lambda x: np.stack([x, x, x], axis=-1)),
+        # FIX: Add **kwargs to both lambdas to accept extra args from Albumentations
+        A.Lambda(image=lambda x, **kwargs: x.astype(np.float32) / 255.0),
+        A.Lambda(image=lambda x, **kwargs: np.stack([x, x, x], axis=-1)),
         ToTensorV2()
     ])
 
