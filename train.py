@@ -318,7 +318,7 @@ def train_segmentation_model(
     
     # Create datasets
     train_dataset = BrainTumorDataset(
-        train_img, train_mask, transform=get_train_transform(img_size)
+        train_img, train_mask, transform=get_train_transform()
     )
     val_dataset = BrainTumorDataset(
         val_img, val_mask, transform=get_val_transform(img_size)
