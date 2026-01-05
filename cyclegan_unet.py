@@ -81,7 +81,7 @@ class GeneratorResNet(nn.Module):
 # ============================================================================
 CONFIG = {
     # UPDATE THIS to where your .pth file actually is!
-    'model_path': '/kaggle/working/cyclegan99.pth', 
+    'model_path': '/kaggle/input/cyclegan99/pytorch/default/1/cyclegan_epoch_99.pth', 
     
     # Your Data Paths
     'source_t1_dir': '/kaggle/input/brats19-60-to-90-slices-0-to-3-relabelled/t1',
