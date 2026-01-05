@@ -162,7 +162,7 @@ def save_visual_check(model, dataset, indices, filename, device):
 
 def train(
     resume_checkpoint=None, 
-    num_epochs=200,   # Set high, Early Stopping will handle the rest
+    num_epochs=300,   # Set high, Early Stopping will handle the rest
     batch_size=8,
     patience=15       # Stop if no improvement for 15 epochs
 ):
