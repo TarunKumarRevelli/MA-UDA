@@ -257,7 +257,7 @@ if __name__ == "__main__":
         'output_img_dir': '/kaggle/working/synthetic_t2',
         'output_mask_dir': '/kaggle/working/synthetic_masks',
         'viz_dir': '/kaggle/working/fda_visualizations',
-        'beta': 0.05,  # Try 0.05, 0.09, or 0.01 for different style transfer strengths
+        'beta': 0.01,  # Try 0.05, 0.09, or 0.01 for different style transfer strengths
         'num_viz_samples': 10
     }
     
