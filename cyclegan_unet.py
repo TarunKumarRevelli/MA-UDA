@@ -8,7 +8,7 @@ from tqdm import tqdm
 import shutil
 
 # ============================================================================
-# 1. ARCHITECTURE (Must match your training script EXACTLY)
+# 1. CORRECTED ARCHITECTURE (Matches cyclegan99.pth)
 # ============================================================================
 
 class ResidualBlock(nn.Module):
@@ -54,16 +54,16 @@ class GeneratorResNet(nn.Module):
         for _ in range(num_residual_blocks):
             model += [ResidualBlock(out_channels)]
 
-        # Upsampling
+        # --- FIX: UPSAMPLING WITH CONV TRANSPOSE (Matches Checkpoint) ---
         for _ in range(2):
             out_channels //= 2
             model += [
-                nn.Upsample(scale_factor=2),
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
+                nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1),
                 nn.InstanceNorm2d(out_channels),
                 nn.ReLU(inplace=True),
             ]
             in_channels = out_channels
+        # ---------------------------------------------------------------
 
         # Output layer
         model += [
@@ -80,7 +80,7 @@ class GeneratorResNet(nn.Module):
 # 2. CONFIGURATION
 # ============================================================================
 CONFIG = {
-    'model_path': '/kaggle/input/cyclegan99/pytorch/default/1/cyclegan_epoch_99.pth', 
+    'model_path': '/kaggle/working/cyclegan99.pth', 
     'source_t1_dir': '/kaggle/input/brats19-60-to-90-slices-0-to-3-relabelled/t1',
     'mask_dir': '/kaggle/input/brats19-60-to-90-slices-0-to-3-relabelled/seg',
     'output_img_dir': '/kaggle/working/synthetic_t2_cyclegan',
@@ -90,7 +90,7 @@ CONFIG = {
 }
 
 # ============================================================================
-# 3. GENERATION LOOP (FIXED LOADING LOGIC)
+# 3. GENERATION LOOP
 # ============================================================================
 
 def generate_cyclegan_data():
@@ -105,10 +105,9 @@ def generate_cyclegan_data():
     # Load Weights
     checkpoint = torch.load(CONFIG['model_path'], map_location=CONFIG['device'])
     
-    # --- FIX: Handle the specific keys in your checkpoint ---
     if isinstance(checkpoint, dict):
         if 'G_s2t' in checkpoint:
-            print("  ✅ Found 'G_s2t' key (Using Source -> Target generator)")
+            print("  ✅ Found 'G_s2t' key")
             state_dict = checkpoint['G_s2t']
         elif 'G_AB' in checkpoint:
             print("  ✅ Found 'G_AB' key")
@@ -116,18 +115,15 @@ def generate_cyclegan_data():
         elif 'model_state_dict' in checkpoint:
             state_dict = checkpoint['model_state_dict']
         else:
-            print("  ⚠️ No known key found, trying to load dictionary directly...")
             state_dict = checkpoint
     else:
         state_dict = checkpoint
-    # -------------------------------------------------------
 
-    # Load state dict
     try:
         generator.load_state_dict(state_dict)
+        print("  ✅ Weights loaded successfully!")
     except Exception as e:
-        print(f"\n❌ STILL FAILING TO LOAD: {e}")
-        print(f"Keys in checkpoint: {list(checkpoint.keys()) if isinstance(checkpoint, dict) else 'Not a dict'}")
+        print(f"\n❌ LOAD ERROR: {e}")
         return
 
     generator.eval()
@@ -137,10 +133,12 @@ def generate_cyclegan_data():
     print(f"🔄 Converting {len(t1_files)} T1 images to Synthetic T2...")
     
     for t1_path in tqdm(t1_files):
+        # Load
         if str(t1_path).endswith('.npy'): img = np.load(t1_path)
         else: img = cv2.imread(str(t1_path), cv2.IMREAD_GRAYSCALE)
             
-        img_3ch = np.stack([img, img, img], axis=0) # (3, H, W)
+        # Preprocess (Gray -> 3Ch -> Norm)
+        img_3ch = np.stack([img, img, img], axis=0)
         
         if img_3ch.max() > 1.0:
             img_norm = (img_3ch.astype(np.float32) / 127.5) - 1.0
@@ -149,23 +147,26 @@ def generate_cyclegan_data():
             
         tensor = torch.from_numpy(img_norm).unsqueeze(0).to(CONFIG['device'])
         
+        # Inference
         with torch.no_grad():
             fake_t2 = generator(tensor)
             
+        # Postprocess
         fake_t2 = fake_t2.squeeze().cpu().numpy()[0, :, :] 
         fake_t2 = (fake_t2 + 1.0) / 2.0 
         fake_t2 = (fake_t2 * 255).astype(np.uint8)
         
+        # Save
         save_path = Path(CONFIG['output_img_dir']) / t1_path.name
         if str(save_path).endswith('.npy'): np.save(save_path, fake_t2)
         else: cv2.imwrite(str(save_path), fake_t2)
         
+        # Copy Mask
         mask_path = Path(CONFIG['mask_dir']) / t1_path.name
         if mask_path.exists():
             shutil.copy(mask_path, Path(CONFIG['output_mask_dir']) / t1_path.name)
             
     print("\n✅ Done! Data generated.")
-    print(f"   Input for Training: {CONFIG['output_img_dir']}")
 
 if __name__ == "__main__":
     generate_cyclegan_data()
