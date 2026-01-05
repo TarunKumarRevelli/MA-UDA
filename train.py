@@ -201,7 +201,7 @@ def train(
     # --- NEW: LEARNING RATE SCHEDULER ---
     # Reduce LR if val_loss doesn't improve for 5 epochs
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.1, patience=5, verbose=True
+        optimizer, mode='min', factor=0.1, patience=5
     )
 
     # State Variables
