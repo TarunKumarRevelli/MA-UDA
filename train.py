@@ -154,21 +154,38 @@ class DiceLoss(nn.Module):
 
 class CombinedLoss(nn.Module):
     """
-    Combined Dice + CrossEntropy Loss
-    Balances pixel-wise accuracy with overlap-based metric
+    Combined Dice + Weighted CrossEntropy Loss
+    Heavily penalizes the model for missing tumor pixels.
     """
     
     def __init__(self, num_classes=4, dice_weight=0.5, ce_weight=0.5):
         super(CombinedLoss, self).__init__()
         self.dice_loss = DiceLoss()
-        self.ce_loss = nn.CrossEntropyLoss()
+        
+        # ============================================================
+        # FIX: Define Class Weights
+        # Class 0 (Background) gets very low weight (0.1)
+        # Classes 1, 2, 3 (Tumor) get high weight (1.0)
+        # This tells the model: "Missing a tumor is 10x worse than missing background"
+        # ============================================================
+        class_weights = torch.tensor([0.1, 1.0, 1.0, 1.0]).float()
+        
+        if torch.cuda.is_available():
+            class_weights = class_weights.cuda()
+            
+        self.ce_loss = nn.CrossEntropyLoss(weight=class_weights)
+        
         self.dice_weight = dice_weight
         self.ce_weight = ce_weight
         self.num_classes = num_classes
     
     def forward(self, predictions, targets):
+        # Cast targets to Long for CrossEntropy
+        targets = targets.long()
+        
         dice = self.dice_loss(predictions, targets, self.num_classes)
         ce = self.ce_loss(predictions, targets)
+        
         return self.dice_weight * dice + self.ce_weight * ce
 
 
@@ -268,7 +285,7 @@ def train_segmentation_model(
     image_dir='/kaggle/working/synthetic_t2',
     mask_dir='/kaggle/working/synthetic_masks',
     output_dir='/kaggle/working/outputs',
-    num_epochs=50,
+    num_epochs=75,
     batch_size=8,
     learning_rate=1e-4,
     img_size=256,
