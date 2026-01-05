@@ -1,8 +1,9 @@
 """
-Medical Image Segmentation Training (Resumable)
-===============================================
-1. Saves full checkpoints (Model + Optimizer + Epoch).
-2. Allows resuming training seamlessly from a crash or pause.
+Medical Image Segmentation Training (Auto-Stop & LR Scheduler)
+==============================================================
+1. Early Stopping: Stops if no improvement for 'patience' epochs.
+2. LR Scheduler: Lowers learning rate when loss plateaus.
+3. Saves Best Model automatically.
 """
 
 import os
@@ -72,16 +73,16 @@ def get_transforms(img_size=256, phase='train'):
         return A.Compose([
             A.Resize(img_size, img_size),
             
-            # --- CRITICAL FIX: CONTRAST AUGMENTATION ---
-            # 1. Randomly brighten images to match Real T2 intensity
+            # --- AGGRESSIVE CONTRAST AUGMENTATION (For CycleGAN) ---
+            # Randomly brighten images to match Real T2 intensity
             A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
             
-            # 2. Sharpen edges to fix T1 blurriness
+            # Sharpen edges to fix any blur from generation
             A.CLAHE(clip_limit=2.0, tile_grid_size=(8, 8), p=0.3),
             
-            # 3. Add noise to prevent overfitting to smooth synthetic textures
+            # Add noise to prevent overfitting to smooth synthetic textures
             A.GaussNoise(var_limit=(10.0, 50.0), p=0.3),
-            # -------------------------------------------
+            # -------------------------------------------------------
 
             A.HorizontalFlip(p=0.5),
             A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=15, p=0.5),
@@ -91,7 +92,7 @@ def get_transforms(img_size=256, phase='train'):
             ToTensorV2()
         ])
     else:
-        # Validation (No augmentation, just formatting)
+        # Validation
         return A.Compose([
             A.Resize(img_size, img_size),
             A.Lambda(image=lambda x, **kwargs: np.stack([x, x, x], axis=-1)),
@@ -156,13 +157,14 @@ def save_visual_check(model, dataset, indices, filename, device):
     model.train()
 
 # ============================================================================
-# MAIN TRAINING LOOP (With Resume Logic)
+# MAIN TRAINING LOOP (With Early Stopping & Scheduler)
 # ============================================================================
 
 def train(
-    resume_checkpoint=None,  # Pass path to .pth file to resume
-    num_epochs=50,
-    batch_size=8
+    resume_checkpoint=None, 
+    num_epochs=200,   # Set high, Early Stopping will handle the rest
+    batch_size=8,
+    patience=15       # Stop if no improvement for 15 epochs
 ):
     # Config
     img_dir = '/kaggle/working/synthetic_t2_cyclegan'
@@ -176,6 +178,11 @@ def train(
     # Data Setup
     images = sorted(list(Path(img_dir).glob('*')))
     masks = sorted(list(Path(mask_dir).glob('*')))
+    
+    if not images:
+        print("❌ Error: No images found! Run the CycleGAN generation script first.")
+        return
+
     train_x, val_x, train_y, val_y = train_test_split(images, masks, test_size=0.2, random_state=42)
     
     train_ds = BrainTumorDataset(train_x, train_y, transform=get_transforms(phase='train'))
@@ -184,7 +191,6 @@ def train(
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2)
     
-    # Pick 3 fixed samples for live checking
     check_indices = [0, len(val_ds)//2, len(val_ds)-1]
 
     # Model & Optimizer Setup
@@ -192,42 +198,32 @@ def train(
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
     criterion = WeightedCombinedLoss()
     
-    # Variables for tracking state
+    # --- NEW: LEARNING RATE SCHEDULER ---
+    # Reduce LR if val_loss doesn't improve for 5 epochs
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.1, patience=5, verbose=True
+    )
+
+    # State Variables
     start_epoch = 0
     best_loss = float('inf')
+    epochs_no_improve = 0  # Early stopping counter
 
-    # ========================================================================
-    # RESUME LOGIC
-    # ========================================================================
+    # Resume Logic
     if resume_checkpoint and os.path.exists(resume_checkpoint):
         print(f"🔄 Resuming from checkpoint: {resume_checkpoint}")
-        # weights_only=False required for full checkpoint dict
         checkpoint = torch.load(resume_checkpoint, map_location=device, weights_only=False)
-        
-        # Load Model
-        if 'model_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            model.load_state_dict(checkpoint) # Fallback if only weights saved
-            
-        # Load Optimizer (Crucial for resuming training momentum)
-        if 'optimizer_state_dict' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            print("  ✅ Optimizer state loaded.")
-            
-        # Load Epoch
-        if 'epoch' in checkpoint:
-            start_epoch = checkpoint['epoch'] + 1
-            print(f"  ✅ Resuming at Epoch {start_epoch+1}")
-            
-        # Load Best Loss (to prevent overwriting best model with worse ones)
-        if 'val_loss' in checkpoint:
-            best_loss = checkpoint['val_loss']
+        if 'model_state_dict' in checkpoint: model.load_state_dict(checkpoint['model_state_dict'])
+        else: model.load_state_dict(checkpoint)
+        if 'optimizer_state_dict' in checkpoint: optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'epoch' in checkpoint: start_epoch = checkpoint['epoch'] + 1
+        if 'val_loss' in checkpoint: best_loss = checkpoint['val_loss']
+        print(f"  ✅ Resuming at Epoch {start_epoch+1}")
 
     # ========================================================================
     # TRAINING LOOP
     # ========================================================================
-    print(f"🎬 Starting Training from Epoch {start_epoch+1} to {num_epochs}...")
+    print(f"🎬 Starting Training (Max {num_epochs} Epochs, Patience {patience})...")
     
     for epoch in range(start_epoch, num_epochs):
         # 1. Train
@@ -257,10 +253,13 @@ def train(
         train_loss /= len(train_loader)
         val_loss /= len(val_loader)
         
-        print(f"  📉 Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"  📉 Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | LR: {current_lr:.1e}")
         
-        # 3. Save "Latest" Checkpoint (Overwrites every epoch)
-        # Allows you to resume if the script crashes suddenly
+        # 3. Scheduler Step
+        scheduler.step(val_loss)
+
+        # 4. Checkpoints & Early Stopping
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
@@ -268,15 +267,9 @@ def train(
             'val_loss': val_loss,
         }, f"{out_dir}/latest_checkpoint.pth")
         
-        # 4. Save Visualizations & Best Model
-        save_visual_check(
-            model, val_ds, check_indices, 
-            filename=f"{out_dir}/epoch_{epoch+1}_check.png", device=device
-        )
-        
         if val_loss < best_loss:
             best_loss = val_loss
-            # Save Best Model with Metadata (So you can resume from "Best" if needed)
+            epochs_no_improve = 0
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -284,18 +277,25 @@ def train(
                 'val_loss': best_loss,
             }, f"{out_dir}/best_model.pth")
             
-            print("  ⭐ New Best Model! Saving checkpoint...")
+            print("  ⭐ New Best Model!")
             save_visual_check(
                 model, val_ds, check_indices, 
                 filename=f"{out_dir}/BEST_MODEL_PREDICTIONS.png", device=device
             )
+        else:
+            epochs_no_improve += 1
+            print(f"  ⏳ No improvement for {epochs_no_improve}/{patience} epochs.")
+            
+        if epochs_no_improve >= patience:
+            print(f"\n🛑 EARLY STOPPING TRIGGERED. Validation loss hasn't improved in {patience} epochs.")
+            print(f"   Best Loss: {best_loss:.4f}")
+            break
 
 if __name__ == "__main__":
-    # Simple CLI Argument Parser
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--resume', type=str, default=None, help='Path to .pth checkpoint')
-    parser.add_argument('--epochs', type=int, default=50, help='Total epochs')
+    parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--epochs', type=int, default=200) # Increased default
     args = parser.parse_args()
     
     train(resume_checkpoint=args.resume, num_epochs=args.epochs)
