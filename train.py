@@ -1,11 +1,12 @@
 """
-Medical Image Segmentation Training (With "Best Model" Visualization)
-===================================================================
-1. Trains U-Net with Class Weights (to fix "all black" predictions).
-2. Saves visualizations automatically whenever the model improves.
+Medical Image Segmentation Training (Resumable)
+===============================================
+1. Saves full checkpoints (Model + Optimizer + Epoch).
+2. Allows resuming training seamlessly from a crash or pause.
 """
 
 import os
+import sys
 import numpy as np
 import torch
 import torch.nn as nn
@@ -67,13 +68,12 @@ class BrainTumorDataset(Dataset):
         return image, mask
 
 def get_transforms(img_size=256, phase='train'):
-    """Returns transform pipeline"""
     if phase == 'train':
         return A.Compose([
             A.Resize(img_size, img_size),
             A.HorizontalFlip(p=0.5),
             A.ShiftScaleRotate(p=0.5),
-            A.Lambda(image=lambda x, **kwargs: np.stack([x, x, x], axis=-1)), # Grayscale -> 3Ch
+            A.Lambda(image=lambda x, **kwargs: np.stack([x, x, x], axis=-1)),
             ToTensorV2()
         ])
     else:
@@ -84,20 +84,16 @@ def get_transforms(img_size=256, phase='train'):
         ])
 
 # ============================================================================
-# WEIGHTED LOSS (Fixes "All Black" Prediction)
+# WEIGHTED LOSS
 # ============================================================================
 
 class WeightedCombinedLoss(nn.Module):
-    def __init__(self, num_classes=4):
+    def __init__(self):
         super().__init__()
-        # Dice Loss (Overlap)
         self.dice_loss = smp.losses.DiceLoss(mode='multiclass', from_logits=True)
-        
-        # Weighted CrossEntropy (Pixel Accuracy)
-        # Weight 0.1 for Background, 1.0 for Tumor classes
+        # Class weights: Background (0.1), Tumor (1.0)
         weights = torch.tensor([0.1, 1.0, 1.0, 1.0]).float()
         if torch.cuda.is_available(): weights = weights.cuda()
-        
         self.ce_loss = nn.CrossEntropyLoss(weight=weights)
     
     def forward(self, preds, targets):
@@ -113,6 +109,12 @@ def save_visual_check(model, dataset, indices, filename, device):
     fig, axes = plt.subplots(len(indices), 3, figsize=(12, 4 * len(indices)))
     if len(indices) == 1: axes = axes[None, :]
     
+    # Helper to colorize
+    def colorize(m):
+        rgb = np.zeros((*m.shape, 3), dtype=np.uint8)
+        for c in range(4): rgb[m == c] = COLORS[c]
+        return rgb
+    
     for i, idx in enumerate(indices):
         image, mask = dataset[idx]
         input_tensor = image.unsqueeze(0).to(device)
@@ -121,13 +123,6 @@ def save_visual_check(model, dataset, indices, filename, device):
             pred = model(input_tensor)
             pred_mask = torch.argmax(pred, dim=1).squeeze(0).cpu().numpy()
             
-        # Helper to colorize
-        def colorize(m):
-            rgb = np.zeros((*m.shape, 3), dtype=np.uint8)
-            for c in range(4): rgb[m == c] = COLORS[c]
-            return rgb
-
-        # Plot
         axes[i, 0].imshow(image[0].cpu().numpy(), cmap='gray')
         axes[i, 0].set_title("Input")
         axes[i, 0].axis('off')
@@ -143,13 +138,17 @@ def save_visual_check(model, dataset, indices, filename, device):
     plt.tight_layout()
     plt.savefig(filename)
     plt.close()
-    model.train() # Switch back to train mode
+    model.train()
 
 # ============================================================================
-# MAIN TRAINING LOOP
+# MAIN TRAINING LOOP (With Resume Logic)
 # ============================================================================
 
-def train():
+def train(
+    resume_checkpoint=None,  # Pass path to .pth file to resume
+    num_epochs=50,
+    batch_size=8
+):
     # Config
     img_dir = '/kaggle/working/synthetic_t2'
     mask_dir = '/kaggle/working/synthetic_masks'
@@ -167,22 +166,55 @@ def train():
     train_ds = BrainTumorDataset(train_x, train_y, transform=get_transforms(phase='train'))
     val_ds = BrainTumorDataset(val_x, val_y, transform=get_transforms(phase='val'))
     
-    train_loader = DataLoader(train_ds, batch_size=8, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_ds, batch_size=8, shuffle=False, num_workers=2)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2)
     
     # Pick 3 fixed samples for live checking
     check_indices = [0, len(val_ds)//2, len(val_ds)-1]
 
-    # Model Setup
+    # Model & Optimizer Setup
     model = smp.Unet(encoder_name='resnet34', classes=4, activation=None).to(device)
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
     criterion = WeightedCombinedLoss()
     
+    # Variables for tracking state
+    start_epoch = 0
     best_loss = float('inf')
+
+    # ========================================================================
+    # RESUME LOGIC
+    # ========================================================================
+    if resume_checkpoint and os.path.exists(resume_checkpoint):
+        print(f"🔄 Resuming from checkpoint: {resume_checkpoint}")
+        # weights_only=False required for full checkpoint dict
+        checkpoint = torch.load(resume_checkpoint, map_location=device, weights_only=False)
+        
+        # Load Model
+        if 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            model.load_state_dict(checkpoint) # Fallback if only weights saved
+            
+        # Load Optimizer (Crucial for resuming training momentum)
+        if 'optimizer_state_dict' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            print("  ✅ Optimizer state loaded.")
+            
+        # Load Epoch
+        if 'epoch' in checkpoint:
+            start_epoch = checkpoint['epoch'] + 1
+            print(f"  ✅ Resuming at Epoch {start_epoch+1}")
+            
+        # Load Best Loss (to prevent overwriting best model with worse ones)
+        if 'val_loss' in checkpoint:
+            best_loss = checkpoint['val_loss']
+
+    # ========================================================================
+    # TRAINING LOOP
+    # ========================================================================
+    print(f"🎬 Starting Training from Epoch {start_epoch+1} to {num_epochs}...")
     
-    print("🎬 Starting Training...")
-    
-    for epoch in range(50): # 50 Epochs
+    for epoch in range(start_epoch, num_epochs):
         # 1. Train
         model.train()
         train_loss = 0
@@ -212,28 +244,43 @@ def train():
         
         print(f"  📉 Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
         
-        # 3. Save Visualizations (Logic you asked for)
-        # A. Save "Current Epoch" visualization (to see progress)
+        # 3. Save "Latest" Checkpoint (Overwrites every epoch)
+        # Allows you to resume if the script crashes suddenly
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'val_loss': val_loss,
+        }, f"{out_dir}/latest_checkpoint.pth")
+        
+        # 4. Save Visualizations & Best Model
         save_visual_check(
             model, val_ds, check_indices, 
-            filename=f"{out_dir}/epoch_{epoch+1}_check.png", 
-            device=device
+            filename=f"{out_dir}/epoch_{epoch+1}_check.png", device=device
         )
         
-        # B. If this is the BEST model so far, save a special "Best" visualization
         if val_loss < best_loss:
             best_loss = val_loss
+            # Save Best Model with Metadata (So you can resume from "Best" if needed)
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_loss': best_loss,
+            }, f"{out_dir}/best_model.pth")
             
-            # Save Checkpoint
-            torch.save(model.state_dict(), f"{out_dir}/best_model.pth")
             print("  ⭐ New Best Model! Saving checkpoint...")
-            
-            # Save "Best Model" Visualization
             save_visual_check(
                 model, val_ds, check_indices, 
-                filename=f"{out_dir}/BEST_MODEL_PREDICTIONS.png", 
-                device=device
+                filename=f"{out_dir}/BEST_MODEL_PREDICTIONS.png", device=device
             )
 
 if __name__ == "__main__":
-    train()
+    # Simple CLI Argument Parser
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--resume', type=str, default=None, help='Path to .pth checkpoint')
+    parser.add_argument('--epochs', type=int, default=50, help='Total epochs')
+    args = parser.parse_args()
+    
+    train(resume_checkpoint=args.resume, num_epochs=args.epochs)
