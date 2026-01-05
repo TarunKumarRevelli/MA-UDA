@@ -461,7 +461,7 @@ if __name__ == "__main__":
         'image_dir': '/kaggle/working/synthetic_t2',
         'mask_dir': '/kaggle/working/synthetic_masks',
         'output_dir': '/kaggle/working/outputs',
-        'num_epochs': 50,
+        'num_epochs': 2,
         'batch_size': 8,
         'learning_rate': 1e-4,
         'img_size': 256,
