@@ -165,8 +165,8 @@ def train(
     batch_size=8
 ):
     # Config
-    img_dir = '/kaggle/working/synthetic_t2'
-    mask_dir = '/kaggle/working/synthetic_masks'
+    img_dir = '/kaggle/working/synthetic_t2_cyclegan'
+    mask_dir = '/kaggle/working/synthetic_masks_cyclegan'
     out_dir = '/kaggle/working/outputs'
     os.makedirs(out_dir, exist_ok=True)
     
