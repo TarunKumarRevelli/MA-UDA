@@ -1,7 +1,7 @@
 """
-Medical Image Segmentation Training with FDA-preprocessed Data
-===============================================================
-Train a U-Net segmentation model on synthetic T2 images created via FDA.
+Medical Image Segmentation Training with Live Visualization
+===========================================================
+Trains a U-Net on BraTS data and saves visual comparisons every epoch.
 
 Author: Senior CV Engineer
 Date: 2026
@@ -22,28 +22,24 @@ import cv2
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
-# Set random seeds for reproducibility
+# Set random seeds
 torch.manual_seed(42)
 np.random.seed(42)
 
+# Visualization Colors
+COLORS = np.array([
+    [0, 0, 0],       # Background
+    [255, 0, 0],     # Necrotic (Red)
+    [0, 255, 0],     # Edema (Green)
+    [0, 0, 255]      # Enhancing (Blue)
+], dtype=np.uint8)
 
 # ============================================================================
-# DATASET CLASS
+# DATASET & TRANSFORMS
 # ============================================================================
 
 class BrainTumorDataset(Dataset):
-    """
-    Dataset for Brain Tumor Segmentation
-    Handles grayscale medical images and multi-class masks
-    """
-    
     def __init__(self, image_paths, mask_paths, transform=None):
-        """
-        Args:
-            image_paths: List of paths to images
-            mask_paths: List of paths to corresponding masks
-            transform: Albumentations transform pipeline
-        """
         self.image_paths = image_paths
         self.mask_paths = mask_paths
         self.transform = transform
@@ -66,14 +62,12 @@ class BrainTumorDataset(Dataset):
         else:
             mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
         
-        # Normalize image to [0, 1]
+        # Normalize
         if image.max() > 1.0:
             image = image.astype(np.float32) / 255.0
         
-        # Ensure mask is integer type
         mask = mask.astype(np.int64)
         
-        # Apply augmentations
         if self.transform:
             augmented = self.transform(image=image, mask=mask)
             image = augmented['image']
@@ -81,393 +75,230 @@ class BrainTumorDataset(Dataset):
         
         return image, mask
 
-
-# ============================================================================
-# DATA AUGMENTATION (CORRECTED)
-# ============================================================================
-
 def get_train_transform(img_size=256):
-    """Training augmentation pipeline"""
     return A.Compose([
         A.Resize(img_size, img_size),
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.5),
         A.RandomRotate90(p=0.5),
         A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=15, p=0.5),
-        A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
-        A.GaussNoise(var_limit=(10.0, 50.0), p=0.3),
-        # FIX: Add **kwargs to accept extra args passed by Albumentations
+        # Fix: Add **kwargs to absorb extra args
         A.Lambda(image=lambda x, **kwargs: np.stack([x, x, x], axis=-1)),
         ToTensorV2()
     ])
-
 
 def get_val_transform(img_size=256):
-    """Validation transform (no augmentation)"""
     return A.Compose([
         A.Resize(img_size, img_size),
-        # FIX: Add **kwargs here as well
         A.Lambda(image=lambda x, **kwargs: np.stack([x, x, x], axis=-1)),
         ToTensorV2()
     ])
 
-
 # ============================================================================
-# LOSS FUNCTIONS
+# LOSS FUNCTIONS (Weighted)
 # ============================================================================
 
 class DiceLoss(nn.Module):
-    """
-    Dice Loss for segmentation
-    Handles class imbalance better than pure CrossEntropy
-    """
-    
     def __init__(self, smooth=1e-6):
         super(DiceLoss, self).__init__()
         self.smooth = smooth
     
     def forward(self, predictions, targets, num_classes=4):
-        """
-        Args:
-            predictions: (B, C, H, W) logits
-            targets: (B, H, W) class indices
-        """
-        # Convert predictions to probabilities
         predictions = torch.softmax(predictions, dim=1)
-        
-        # FIX: Force targets to be LongTensor for one_hot compatibility
-        targets = targets.long() 
-        
-        # One-hot encode targets
+        targets = targets.long() # Fix type
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=num_classes)
         targets_one_hot = targets_one_hot.permute(0, 3, 1, 2).float()
         
-        # Calculate Dice coefficient for each class
         intersection = (predictions * targets_one_hot).sum(dim=(2, 3))
         union = predictions.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
         
         dice = (2.0 * intersection + self.smooth) / (union + self.smooth)
-        
-        # Return 1 - mean dice (loss)
         return 1.0 - dice.mean()
 
-
 class CombinedLoss(nn.Module):
-    """
-    Combined Dice + Weighted CrossEntropy Loss
-    Heavily penalizes the model for missing tumor pixels.
-    """
-    
     def __init__(self, num_classes=4, dice_weight=0.5, ce_weight=0.5):
         super(CombinedLoss, self).__init__()
         self.dice_loss = DiceLoss()
         
-        # ============================================================
-        # FIX: Define Class Weights
-        # Class 0 (Background) gets very low weight (0.1)
-        # Classes 1, 2, 3 (Tumor) get high weight (1.0)
-        # This tells the model: "Missing a tumor is 10x worse than missing background"
-        # ============================================================
+        # FIX: Add Class Weights to solve "All Black" issue
+        # Background (0.1) vs Tumor (1.0)
         class_weights = torch.tensor([0.1, 1.0, 1.0, 1.0]).float()
-        
         if torch.cuda.is_available():
             class_weights = class_weights.cuda()
             
         self.ce_loss = nn.CrossEntropyLoss(weight=class_weights)
-        
         self.dice_weight = dice_weight
         self.ce_weight = ce_weight
         self.num_classes = num_classes
     
     def forward(self, predictions, targets):
-        # Cast targets to Long for CrossEntropy
         targets = targets.long()
-        
         dice = self.dice_loss(predictions, targets, self.num_classes)
         ce = self.ce_loss(predictions, targets)
-        
         return self.dice_weight * dice + self.ce_weight * ce
 
-
 # ============================================================================
-# METRICS
-# ============================================================================
-
-def calculate_dice_score(predictions, targets, num_classes=4):
-    """Calculate Dice score for evaluation"""
-    predictions = torch.argmax(predictions, dim=1)
-    
-    dice_scores = []
-    for c in range(num_classes):
-        pred_c = (predictions == c).float()
-        target_c = (targets == c).float()
-        
-        intersection = (pred_c * target_c).sum()
-        union = pred_c.sum() + target_c.sum()
-        
-        if union == 0:
-            dice_scores.append(1.0)
-        else:
-            dice_scores.append((2.0 * intersection / union).item())
-    
-    return np.mean(dice_scores)
-
-
-# ============================================================================
-# TRAINING FUNCTIONS
+# VISUALIZATION HELPER (The New Part)
 # ============================================================================
 
-def train_epoch(model, dataloader, criterion, optimizer, device):
-    """Train for one epoch"""
-    model.train()
-    running_loss = 0.0
-    running_dice = 0.0
-    
-    pbar = tqdm(dataloader, desc="Training")
-    for images, masks in pbar:
-        images = images.to(device)
-        masks = masks.to(device).long()
-        
-        # Forward pass
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, masks)
-        
-        # Backward pass
-        loss.backward()
-        optimizer.step()
-        
-        # Calculate metrics
-        dice = calculate_dice_score(outputs, masks)
-        running_loss += loss.item()
-        running_dice += dice
-        
-        pbar.set_postfix({'loss': f"{loss.item():.4f}", 'dice': f"{dice:.4f}"})
-    
-    epoch_loss = running_loss / len(dataloader)
-    epoch_dice = running_dice / len(dataloader)
-    
-    return epoch_loss, epoch_dice
-
-
-def validate_epoch(model, dataloader, criterion, device):
-    """Validate for one epoch"""
+def visualize_training_sample(model, dataset, indices, epoch, save_dir, device):
+    """Saves a comparison plot for fixed samples during training"""
     model.eval()
-    running_loss = 0.0
-    running_dice = 0.0
+    fig, axes = plt.subplots(len(indices), 4, figsize=(15, 4 * len(indices)))
     
-    with torch.no_grad():
-        pbar = tqdm(dataloader, desc="Validation")
-        for images, masks in pbar:
-            images = images.to(device)
-            masks = masks.to(device).long()
-            
-            outputs = model(images)
-            loss = criterion(outputs, masks)
-            
-            dice = calculate_dice_score(outputs, masks)
-            running_loss += loss.item()
-            running_dice += dice
-            
-            pbar.set_postfix({'loss': f"{loss.item():.4f}", 'dice': f"{dice:.4f}"})
+    # Handle single sample case
+    if len(indices) == 1: axes = axes[None, :]
     
-    epoch_loss = running_loss / len(dataloader)
-    epoch_dice = running_dice / len(dataloader)
-    
-    return epoch_loss, epoch_dice
+    for row_idx, sample_idx in enumerate(indices):
+        # Load sample
+        image, mask = dataset[sample_idx]
+        input_tensor = image.unsqueeze(0).to(device) # (1, 3, H, W)
+        
+        # Inference
+        with torch.no_grad():
+            output = model(input_tensor)
+            pred_mask = torch.argmax(output, dim=1).squeeze(0).cpu().numpy()
+        
+        # Convert tensors to numpy for plotting
+        img_np = image[0].cpu().numpy() # Take first channel for display
+        mask_np = mask.cpu().numpy()
+        
+        # Create RGB masks
+        def to_rgb(m):
+            h, w = m.shape
+            rgb = np.zeros((h, w, 3), dtype=np.uint8)
+            for i in range(4): rgb[m == i] = COLORS[i]
+            return rgb
 
+        # Plot
+        # 1. Input
+        axes[row_idx, 0].imshow(img_np, cmap='gray')
+        axes[row_idx, 0].set_title(f"Epoch {epoch} | Input")
+        axes[row_idx, 0].axis('off')
+        
+        # 2. GT
+        axes[row_idx, 1].imshow(to_rgb(mask_np))
+        axes[row_idx, 1].set_title("Ground Truth")
+        axes[row_idx, 1].axis('off')
+        
+        # 3. Pred
+        axes[row_idx, 2].imshow(to_rgb(pred_mask))
+        axes[row_idx, 2].set_title("Prediction")
+        axes[row_idx, 2].axis('off')
+        
+        # 4. Overlay
+        img_rgb = cv2.cvtColor((img_np * 255).astype(np.uint8), cv2.COLOR_GRAY2RGB)
+        overlay = cv2.addWeighted(img_rgb, 0.6, to_rgb(pred_mask), 0.4, 0)
+        axes[row_idx, 3].imshow(overlay)
+        axes[row_idx, 3].set_title("Overlay")
+        axes[row_idx, 3].axis('off')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f'viz_epoch_{epoch:03d}.png'))
+    plt.close()
+    model.train()
 
 # ============================================================================
-# MAIN TRAINING PIPELINE
+# TRAINING LOOP
 # ============================================================================
 
 def train_segmentation_model(
     image_dir='/kaggle/working/synthetic_t2',
     mask_dir='/kaggle/working/synthetic_masks',
     output_dir='/kaggle/working/outputs',
-    num_epochs=75,
+    num_epochs=50,
     batch_size=8,
-    learning_rate=1e-4,
-    img_size=256,
-    num_classes=4,
-    val_split=0.2
+    learning_rate=1e-4
 ):
-    """
-    Main training pipeline
-    
-    Args:
-        image_dir: Path to synthetic T2 images
-        mask_dir: Path to segmentation masks
-        output_dir: Where to save model checkpoints and logs
-        num_epochs: Number of training epochs
-        batch_size: Training batch size
-        learning_rate: Initial learning rate
-        img_size: Input image size
-        num_classes: Number of segmentation classes
-        val_split: Validation split ratio
-    """
-    
-    print("=" * 80)
-    print("BRAIN TUMOR SEGMENTATION TRAINING")
-    print("=" * 80)
-    
-    # Create output directory
     os.makedirs(output_dir, exist_ok=True)
+    viz_dir = os.path.join(output_dir, 'training_visuals')
+    os.makedirs(viz_dir, exist_ok=True)
     
-    # Device configuration
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"\n🔧 Device: {device}")
+    print(f"🔧 Device: {device}")
     
-    # Get file lists
+    # 1. Prepare Data
     image_paths = sorted(list(Path(image_dir).glob('*')))
     mask_paths = sorted(list(Path(mask_dir).glob('*')))
     
-    print(f"\n📁 Dataset:")
-    print(f"  Images: {len(image_paths)}")
-    print(f"  Masks: {len(mask_paths)}")
-    
-    if len(image_paths) != len(mask_paths):
-        raise ValueError("❌ Mismatch between number of images and masks!")
-    
-    # Train/Val split
     train_img, val_img, train_mask, val_mask = train_test_split(
-        image_paths, mask_paths, test_size=val_split, random_state=42
+        image_paths, mask_paths, test_size=0.2, random_state=42
     )
     
-    print(f"  Train samples: {len(train_img)}")
-    print(f"  Val samples: {len(val_img)}")
+    train_dataset = BrainTumorDataset(train_img, train_mask, transform=get_train_transform())
+    val_dataset = BrainTumorDataset(val_img, val_mask, transform=get_val_transform())
     
-    # Create datasets
-    train_dataset = BrainTumorDataset(
-        train_img, train_mask, transform=get_train_transform(img_size)
-    )
-    val_dataset = BrainTumorDataset(
-        val_img, val_mask, transform=get_val_transform(img_size)
-    )
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
     
-    # Create dataloaders
-    train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, num_workers=2
-    )
-    val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False, num_workers=2
-    )
+    # Pick 3 fixed samples for visualization
+    viz_indices = [0, len(val_dataset)//2, len(val_dataset)-1]
     
-    # Create model
-    print(f"\n🏗️  Building U-Net with ResNet34 encoder...")
+    # 2. Setup Model
+    print("🏗️ Building Model...")
     model = smp.Unet(
         encoder_name='resnet34',
         encoder_weights='imagenet',
         in_channels=3,
-        classes=num_classes,
-        activation=None  # We'll apply softmax in loss/inference
-    )
-    model = model.to(device)
+        classes=4,
+        activation=None
+    ).to(device)
     
-    # Loss and optimizer
-    criterion = CombinedLoss(num_classes=num_classes, dice_weight=0.5, ce_weight=0.5)
+    criterion = CombinedLoss(num_classes=4)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=5
-    )
     
-    # Training loop
-    print(f"\n🚀 Starting training for {num_epochs} epochs...")
-    best_dice = 0.0
-    train_losses, val_losses = [], []
-    train_dices, val_dices = [], []
+    # 3. Training Loop
+    best_loss = float('inf')
+    
+    print(f"🚀 Starting training for {num_epochs} epochs...")
     
     for epoch in range(num_epochs):
-        print(f"\n{'='*80}")
-        print(f"Epoch {epoch+1}/{num_epochs}")
-        print(f"{'='*80}")
+        model.train()
+        running_loss = 0.0
         
-        # Train
-        train_loss, train_dice = train_epoch(model, train_loader, criterion, optimizer, device)
-        train_losses.append(train_loss)
-        train_dices.append(train_dice)
+        # Train Step
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+        for images, masks in pbar:
+            images, masks = images.to(device), masks.to(device)
+            
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, masks)
+            loss.backward()
+            optimizer.step()
+            
+            running_loss += loss.item()
+            pbar.set_postfix({'loss': f"{loss.item():.4f}"})
+            
+        epoch_loss = running_loss / len(train_loader)
         
-        # Validate
-        val_loss, val_dice = validate_epoch(model, val_loader, criterion, device)
-        val_losses.append(val_loss)
-        val_dices.append(val_dice)
+        # Validation Step
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for images, masks in val_loader:
+                images, masks = images.to(device), masks.to(device)
+                outputs = model(images)
+                loss = criterion(outputs, masks)
+                val_loss += loss.item()
         
-        # Update learning rate
-        scheduler.step(val_dice)
+        val_loss /= len(val_loader)
+        print(f"  Train Loss: {epoch_loss:.4f} | Val Loss: {val_loss:.4f}")
         
-        # Print epoch summary
-        print(f"\n📊 Epoch {epoch+1} Summary:")
-        print(f"  Train Loss: {train_loss:.4f} | Train Dice: {train_dice:.4f}")
-        print(f"  Val Loss: {val_loss:.4f}   | Val Dice: {val_dice:.4f}")
+        # --- LIVE VISUALIZATION ---
+        # Visualize the SAME 3 samples every epoch to see progress
+        visualize_training_sample(model, val_dataset, viz_indices, epoch+1, viz_dir, device)
+        # --------------------------
         
-        # Save best model
-        if val_dice > best_dice:
-            best_dice = val_dice
-            checkpoint_path = os.path.join(output_dir, 'best_model.pth')
+        # Save Best Model
+        if val_loss < best_loss:
+            best_loss = val_loss
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'best_dice': best_dice,
-            }, checkpoint_path)
-            print(f"  ✅ New best model saved! (Dice: {best_dice:.4f})")
-        
-        # Save checkpoint every 10 epochs
-        if (epoch + 1) % 10 == 0:
-            checkpoint_path = os.path.join(output_dir, f'checkpoint_epoch_{epoch+1}.pth')
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-            }, checkpoint_path)
-    
-    # Plot training curves
-    print(f"\n📈 Plotting training curves...")
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
-    axes[0].plot(train_losses, label='Train Loss', linewidth=2)
-    axes[0].plot(val_losses, label='Val Loss', linewidth=2)
-    axes[0].set_xlabel('Epoch', fontsize=12)
-    axes[0].set_ylabel('Loss', fontsize=12)
-    axes[0].set_title('Training & Validation Loss', fontsize=14, fontweight='bold')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
-    
-    axes[1].plot(train_dices, label='Train Dice', linewidth=2)
-    axes[1].plot(val_dices, label='Val Dice', linewidth=2)
-    axes[1].set_xlabel('Epoch', fontsize=12)
-    axes[1].set_ylabel('Dice Score', fontsize=12)
-    axes[1].set_title('Training & Validation Dice Score', fontsize=14, fontweight='bold')
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'training_curves.png'), dpi=150)
-    plt.close()
-    
-    print(f"\n✅ Training complete!")
-    print(f"  Best Dice Score: {best_dice:.4f}")
-    print(f"  Model saved to: {output_dir}")
-    print("=" * 80)
-
-
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
+                'val_loss': val_loss,
+            }, os.path.join(output_dir, 'best_model.pth'))
+            print("  ✅ Saved Best Model")
 
 if __name__ == "__main__":
-    # Configuration
-    CONFIG = {
-        'image_dir': '/kaggle/working/synthetic_t2',
-        'mask_dir': '/kaggle/working/synthetic_masks',
-        'output_dir': '/kaggle/working/outputs',
-        'num_epochs': 2,
-        'batch_size': 8,
-        'learning_rate': 1e-4,
-        'img_size': 256,
-        'num_classes': 4,
-        'val_split': 0.2
-    }
-    
-    # Train model
-    train_segmentation_model(**CONFIG)
+    train_segmentation_model()
