@@ -71,12 +71,27 @@ def get_transforms(img_size=256, phase='train'):
     if phase == 'train':
         return A.Compose([
             A.Resize(img_size, img_size),
+            
+            # --- CRITICAL FIX: CONTRAST AUGMENTATION ---
+            # 1. Randomly brighten images to match Real T2 intensity
+            A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
+            
+            # 2. Sharpen edges to fix T1 blurriness
+            A.CLAHE(clip_limit=2.0, tile_grid_size=(8, 8), p=0.3),
+            
+            # 3. Add noise to prevent overfitting to smooth synthetic textures
+            A.GaussNoise(var_limit=(10.0, 50.0), p=0.3),
+            # -------------------------------------------
+
             A.HorizontalFlip(p=0.5),
-            A.ShiftScaleRotate(p=0.5),
+            A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=15, p=0.5),
+            
+            # Ensure 3-channel output
             A.Lambda(image=lambda x, **kwargs: np.stack([x, x, x], axis=-1)),
             ToTensorV2()
         ])
     else:
+        # Validation (No augmentation, just formatting)
         return A.Compose([
             A.Resize(img_size, img_size),
             A.Lambda(image=lambda x, **kwargs: np.stack([x, x, x], axis=-1)),
