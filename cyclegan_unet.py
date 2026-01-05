@@ -80,7 +80,7 @@ class GeneratorResNet(nn.Module):
 # 2. CONFIGURATION
 # ============================================================================
 CONFIG = {
-    'model_path': '/kaggle/working/cyclegan99.pth', 
+    'model_path': '/kaggle/input/cyclegan99/pytorch/default/1/cyclegan_epoch_99.pth', 
     'source_t1_dir': '/kaggle/input/brats19-60-to-90-slices-0-to-3-relabelled/t1',
     'mask_dir': '/kaggle/input/brats19-60-to-90-slices-0-to-3-relabelled/seg',
     'output_img_dir': '/kaggle/working/synthetic_t2_cyclegan',
