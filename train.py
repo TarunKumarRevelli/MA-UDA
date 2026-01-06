@@ -162,7 +162,7 @@ def save_visual_check(model, dataset, indices, filename, device):
 
 def train(
     resume_checkpoint=None, 
-    num_epochs=300,   # Set high, Early Stopping will handle the rest
+    num_epochs=1000,   # Set high, Early Stopping will handle the rest
     batch_size=8,
     patience=15       # Stop if no improvement for 15 epochs
 ):
@@ -295,7 +295,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--resume', type=str, default=None)
-    parser.add_argument('--epochs', type=int, default=200) # Increased default
+    parser.add_argument('--epochs', type=int, default=1000) # Increased default
     args = parser.parse_args()
     
     train(resume_checkpoint=args.resume, num_epochs=args.epochs)
