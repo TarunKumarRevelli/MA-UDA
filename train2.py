@@ -202,7 +202,7 @@ def train(
     criterion = WeightedCombinedLoss()
     
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.1, patience=5, verbose=True
+        optimizer, mode='min', factor=0.1, patience=5
     )
 
     # State Variables
