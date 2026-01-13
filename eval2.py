@@ -97,7 +97,7 @@ def evaluate_metrics_full():
     device = CONFIG['device']
     
     # Load Model
-    model = smp.UnetPlusPlus(encoder_name='resnet34', classes=4).to(device)
+    model = smp.Unet(encoder_name='resnet34', classes=4).to(device)
     state = torch.load(CONFIG['model_path'], map_location=device)
     if 'model_state_dict' in state: model.load_state_dict(state['model_state_dict'])
     else: model.load_state_dict(state)
