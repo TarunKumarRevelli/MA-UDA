@@ -166,7 +166,7 @@ def train(
     patience=15
 ):
     # --- SAFETY FIX: New Folder for U-Net++ ---
-    out_dir = '/kaggle/working/outputs_unetplusplus'
+    out_dir = '/kaggle/working/outputs_unet'
     img_dir = '/kaggle/working/synthetic_t2_cyclegan'
     mask_dir = '/kaggle/working/synthetic_masks_cyclegan'
     
@@ -197,7 +197,7 @@ def train(
 
     # Model & Optimizer Setup
     print("🔥 Architecture: U-Net++ (Nested U-Net)")
-    model = smp.UnetPlusPlus(encoder_name='resnet34', classes=4, activation=None).to(device)
+    model = smp.Unet(encoder_name='resnet50', classes=4, activation=None).to(device)
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
     criterion = WeightedCombinedLoss()
     
