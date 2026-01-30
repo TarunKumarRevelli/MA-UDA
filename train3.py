@@ -80,29 +80,44 @@ class BrainTumorDataset(Dataset):
 # ============================================================================
 # AUGMENTATIONS
 # ============================================================================
-def get_transforms(img_size=256, phase="train"):
-    base = [
-        A.Resize(img_size, img_size),
-        A.Lambda(image=lambda x, **_: np.stack([x, x, x], axis=-1)),
-        A.Normalize(
-            mean=(0.485, 0.456, 0.406),
-            std=(0.229, 0.224, 0.225)
-        ),
-        ToTensorV2()
-    ]
+def gray_to_rgb(image, **kwargs):
+    return np.stack([image, image, image], axis=-1)
 
+def get_transforms(img_size=256, phase="train"):
     if phase == "train":
         return A.Compose([
             A.Resize(img_size, img_size),
+
             A.RandomBrightnessContrast(0.3, 0.3, p=0.5),
-            A.CLAHE(2.0, (8, 8), p=0.3),
-            A.GaussNoise((10, 50), p=0.3),
+            A.CLAHE(clip_limit=2.0, tile_grid_size=(8, 8), p=0.3),
+
+            # ✅ FIXED: new Albumentations API
+            A.GaussNoise(std_range=(0.02, 0.10), p=0.3),
+
             A.HorizontalFlip(p=0.5),
-            A.ShiftScaleRotate(0.1, 0.1, 15, p=0.5),
-            *base[1:]
+            A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1,
+                               rotate_limit=15, p=0.5),
+
+            # ✅ FIXED: multiprocessing-safe
+            A.Lambda(image=gray_to_rgb),
+
+            A.Normalize(
+                mean=(0.485, 0.456, 0.406),
+                std=(0.229, 0.224, 0.225)
+            ),
+            ToTensorV2()
         ])
     else:
-        return A.Compose(base)
+        return A.Compose([
+            A.Resize(img_size, img_size),
+            A.Lambda(image=gray_to_rgb),
+            A.Normalize(
+                mean=(0.485, 0.456, 0.406),
+                std=(0.229, 0.224, 0.225)
+            ),
+            ToTensorV2()
+        ])
+
 
 # ============================================================================
 # LOSS
