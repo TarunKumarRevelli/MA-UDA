@@ -195,7 +195,7 @@ def train(resume_checkpoint=None, epochs=1000, batch_size=8, patience=15):
     val_loader = DataLoader(val_ds, batch_size, False, num_workers=2)
 
     # 🔥 SOTA MODEL
-    model = smp.UnetPlusPlus(encoder_name="mit_b5",encoder_weights="imagenet",classes=4,activation=None).to(device)
+    model = smp.Unet(encoder_name="mit_b5",encoder_weights="imagenet",classes=4,activation=None).to(device)
 
 
     optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
