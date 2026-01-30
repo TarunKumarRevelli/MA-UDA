@@ -197,7 +197,9 @@ def train(
 
     # Model & Optimizer Setup
     print("🔥 Architecture: U-Net++ (Nested U-Net)")
-    model = smp.Unet(encoder_name='efficientnet-b4', classes=4, activation=None).to(device)
+    model = smp.Unet(encoder_name='resnet34', classes=4, activation=None).to(device)
+    #model = smp.Unet(encoder_name="convnext_base",encoder_weights="imagenet",classes=4,activation=None).to(device)
+
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
     criterion = WeightedCombinedLoss()
     
