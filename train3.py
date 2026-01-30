@@ -75,7 +75,9 @@ class BrainTumorDataset(Dataset):
             image = augmented["image"]
             mask = augmented["mask"]
 
-        return image, mask
+        # ✅ CRITICAL FIX
+        return image, mask.long()
+
 
 # ============================================================================
 # AUGMENTATIONS
