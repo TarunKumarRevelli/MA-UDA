@@ -173,8 +173,8 @@ def train(resume_checkpoint=None, epochs=1000, batch_size=8, patience=15):
         images, masks, test_size=0.2, random_state=42
     )
 
-    train_ds = BrainTumorDataset(train_x, train_y, get_transforms("train"))
-    val_ds = BrainTumorDataset(val_x, val_y, get_transforms("val"))
+    train_ds = BrainTumorDataset(train_x, train_y, get_transforms(phase="train"))
+    val_ds = BrainTumorDataset(val_x, val_y, get_transforms(phase="val"))
 
     train_loader = DataLoader(train_ds, batch_size, True, num_workers=2)
     val_loader = DataLoader(val_ds, batch_size, False, num_workers=2)
